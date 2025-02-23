@@ -1,0 +1,4893 @@
+---
+title: "transmembrane_palmitoylation_gbm_mar_2024"
+output: html_document
+date: "2024-03-02"
+---
+
+## General library calls
+```{r}
+library(tidyverse)
+library(readr)
+
+```
+
+
+## Import Swisspalm for training data
+# sacchromyces and arabidopsis data are included
+```{r}
+
+## Import Swisspalm dataset of sites
+swisspalm_all <- read_csv("swisspalm_sites_all.csv", 
+    skip = 4)
+
+# Create a new dataframe with the selected rows
+swisspalm_confirmed <- swisspalm_all[
+  grepl("Point|palmitic", swisspalm_all$hit_techniques, ignore.case = TRUE) |
+  grepl("Point|palmitic", swisspalm_all$site_techniques, ignore.case = TRUE), 
+]
+
+# remove any duplicate "sites
+# if rows the same uniprot accession and position, then only one of the rows is kept
+swisspalm_confirmed <- swisspalm_confirmed[!duplicated(swisspalm_confirmed[, c("uniprot_ac", "pos")]), ]
+
+# make swisspalm dataframe of 5 mammals, arabidopsis and yeast
+swisspalm_confirmed_7_species <- swisspalm_confirmed[swisspalm_confirmed$organism %in% c("Bos taurus", "Canis familiaris", "Rattus norvegicus", "Homo sapiens", "Mus musculus", "Sus scrofa", "Saccharomyces cerevisiae (strain ATCC 204508 / S288c)", "Arabidopsis thaliana"), ]
+
+# Subset the dataframe to include only specified columns
+swisspalm_confirmed_7_species <- swisspalm_confirmed_7_species[, c("uniprot_ac", "uniprot_id", "uniprot_description", "organism", "main_gene_name", "gene_names", "pos", "uncertain_pos")]
+
+## import dataframes with all Swissprot (reviewed) data
+## this will support matching to all possible datasets
+## uniprot format
+download_mammal_for_left_join <- read_csv("download_mammal_for_left_join.csv")
+download_arabidopsis_for_left_join <- read_csv("download_arabidopsis_for_left_join.csv")
+download_yeast_for_left_join <- read_csv("download_yeast_for_left_join.csv")
+
+# Combine the data frames using rbind
+download_7_species_combined <- rbind(download_mammal_for_left_join, 
+                                     download_arabidopsis_for_left_join, 
+                                     download_yeast_for_left_join)
+
+# rename the mammal to 7_species to keep the code working (ONLY USED WHEN IGNORING ARABIDOPIS AND YEAST DATA)
+# download_7_species_combined <- download_mammal_for_left_join
+
+# copy relevant data such as topology into the swisspalm dataset
+# Subset to keep only the desired columns
+download_7_species_combined <- download_7_species_combined[, c("Entry", "Length", "Subcellular location [CC]", "Sequence", "Topological domain", "Transmembrane", "Lipidation")]
+
+# Left join on 'uniprot_ac' and 'Entry'
+swisspalm_confirmed_7_species <- merge(swisspalm_confirmed_7_species, download_7_species_combined, 
+                                     by.x = "uniprot_ac", by.y = "Entry", 
+                                     all.x = TRUE)
+
+## remove no-longer-needed datasets
+rm(swisspalm_all)
+rm(swisspalm_confirmed)
+
+# change uniprot_ac column to Entry
+swisspalm_confirmed_7_species <- swisspalm_confirmed_7_species %>%
+  rename(Entry = uniprot_ac)
+
+# Determine how many rows have topological information and can be used
+# Count the number of rows with a non-NA value in 'Topological domain'
+num_rows_with_location <- sum(!is.na(swisspalm_confirmed_7_species$`Topological domain`))
+
+# Print the result
+print(num_rows_with_location)
+
+```
+
+
+## Import Rodenburg et al to get more training data
+```{r}
+
+library(readr)
+rodenberg_claudin_3 <- read_csv("rodenberg_claudin_3.csv")
+
+# Filter for only positive training data
+# Only the keep the rows that have $Palmitoylation_Fraction > 0.25
+rodenberg_claudin_3 <- rodenberg_claudin_3 %>%
+  filter(Palmitoylation_Fraction > 0.25)
+
+# match remaining columns to swisspalm_confirmed_7_species so that the rodenburg data can be joined to it
+# Modifying the dataframe
+rodenberg_claudin_3 <- rodenberg_claudin_3 %>%
+  select(-Palmitoylation_Fraction) %>%
+  rename(
+    uniprot_id = `Entry Name`,
+    uniprot_description = `Protein names`,
+    gene_names = `Gene Names`,
+    pos = Mutant
+  ) %>%
+  mutate(
+    uncertain_pos = NA,
+    main_gene_name = NA,
+    organism = NA,
+    Lipidation = NA
+  )
+
+# Modify uniprot_id to keep only the part before the underscore (important for grouping used in the feature extraction)
+rodenberg_claudin_3$Entry <- sub("_.*", "", rodenberg_claudin_3$Entry)
+
+# Step 1: Get the column names from swisspalm_confirmed_7_species
+column_order <- names(swisspalm_confirmed_7_species)
+
+# Step 2: Reorder the columns of rodenberg_claudin_3_modified
+rodenberg_claudin_3 <- rodenberg_claudin_3[, column_order]
+
+# Step 3: Check if all columns in rodenberg_claudin_3_reordered exist in swisspalm_confirmed_7_species
+missing_columns <- setdiff(names(rodenberg_claudin_3), names(swisspalm_confirmed_7_species))
+if (length(missing_columns) > 0) {
+  message("The following columns are missing in swisspalm_confirmed_7_species: ", paste(missing_columns, collapse = ", "))
+}
+
+```
+
+
+# merge swisspalm_confirmed_7_species and rodenberg_claudin_3 to get training_mammal dataset
+# 2nd line of code will avoid rodenberg_claudin_3 data if it's run
+```{r}
+
+# Combining the dataframes
+training_mammal <- rbind(swisspalm_confirmed_7_species, rodenberg_claudin_3)
+
+# Avoid claudin_3 rodenburg data
+# training_mammal <- swisspalm_confirmed_7_species
+
+# number of rows in training_mammal that have topology annotated
+# Count the number of rows with a non-NA value in 'Topological domain'
+num_rows_with_location <- sum(!is.na(training_mammal$`Topological domain`))
+
+# Print the result
+print(num_rows_with_location)
+
+
+```
+
+
+## Import mouse HOLDOUT dataset from uniprot
+```{r}
+
+# import mouse membrane proteome
+library(readr)
+uniprot_mouse_total_membrane_proteome <- read_csv("uniprot_mouse_total_membrane_proteome.csv")
+
+# Deplete it of any training proteins and remove the specific Entry "P10404"
+# also remove P10404 (viral protein but annotated as mouse in uniprot?)
+# remove Q9TU34 (bos taurus protein that has an "X" in protein sequence)
+holdout_mouse <- uniprot_mouse_total_membrane_proteome %>%
+                filter(!Entry %in% training_mammal$Entry) %>%
+                filter(!Entry %in% c("P10404", "Q9TU34"))
+
+# Keep only the rows that have data in column $Lipidation (i.e., are likely palmitoylated)
+holdout_mouse <- holdout_mouse %>%
+                filter(!is.na(Lipidation))
+
+```
+
+
+## Import MAMMAL holdout dataset from uniprot
+```{r}
+
+# import mouse membrane proteome
+library(readr)
+uniprot_mammal_total_membrane_proteome <- read_csv("download_mammal_for_left_join.csv")
+
+# Deplete it of any training proteins and remove the specific Entry "P10404"
+# remove P10404 (viral protein but annotated as mouse in uniprot?)
+# remove Q9TU34 (bos taurus protein that has an "X" in protein sequence)
+holdout_mammal <- uniprot_mammal_total_membrane_proteome %>%
+                filter(!Entry %in% training_mammal$Entry) %>%
+                filter(!Entry %in% c("P10404", "Q9TU34"))
+
+# Keep only the rows that have data in column $Lipidation (i.e., are likely palmitoylated)
+holdout_mammal <- holdout_mammal %>%
+                filter(!is.na(Lipidation))
+
+
+# keep only the rows that have data in column $Lipidation (i.e. are likely palmitoylated)
+holdout_mammal <- holdout_mammal %>%
+                filter(!is.na(Lipidation))
+
+```
+
+
+## Import viral protein dataset
+```{r}
+
+## Import - 36 proteins
+viet_uniprot_swisspalm <- read_csv("viet_uniprot_swisspalm.csv")
+
+# Keep only the rows that have topological information - 30 proteins
+viet_uniprot_swisspalm <- viet_uniprot_swisspalm[!is.na(viet_uniprot_swisspalm$`Topological domain`), ]
+
+```
+
+
+# Define a feature extraction specifically for the viral dataset
+# Window sequence = 5
+```{r}
+
+topopalmtree_feature_extract_virus_rev_3 <- function(dataframe) {
+  
+# Create new column 'transmembrane_type' based on conditions
+dataframe <- dataframe %>%
+  mutate(transmembrane_type = case_when(
+    grepl("Multi-pass", `Subcellular location [CC]`, ignore.case = TRUE) ~ "multi",
+    grepl("Single-pass membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type I/III",
+    grepl("Single-pass type I membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type I/III",
+    grepl("Single-pass type II membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type II/IV",
+    grepl("Single-pass type III membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type I/III",
+    grepl("Single-pass type IV membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type II/IV"
+  ))
+
+# Remove rows where 'transmembrane_type' is NA
+dataframe <- dataframe %>%
+  filter(!is.na(transmembrane_type))
+
+# Remove the subcellular location column now that information has been extracted into new column
+dataframe <- dataframe %>% 
+  select(-`Subcellular location [CC]`)
+
+#### Extract the topology features into new columns
+
+# Split up the information in Topological domain column into individual rows based on each topology
+# this code also handles the situations where the topological domain is only 1 amino acid, as often happens for tiny loop regions
+dataframe <- dataframe %>%
+  mutate(
+    `Topological domain` = str_split(`Topological domain`, "(?=TOPO_DOM)", simplify = FALSE)
+  ) %>%
+  unnest_longer(`Topological domain`) %>%
+  mutate(
+    Sequence_range = str_extract(`Topological domain`, "(?<=TOPO_DOM )[0-9]+\\.\\.?[0-9]*|(?<=TOPO_DOM )[0-9]+"),
+    Topological_location = str_extract(`Topological domain`, "(?<=/note=\")[A-Za-z ]+(?=\")")
+  ) %>%
+  mutate(
+    Sequence_range = ifelse(str_detect(Sequence_range, "\\.."), Sequence_range, paste0(Sequence_range, "..", Sequence_range))
+  )
+
+# Separate 'x' and 'y' from 'Sequence_range', extract sequence, and keep 'Sequence' column
+dataframe <- dataframe %>%
+  separate(col = Sequence_range, into = c("start", "end"), sep = "\\.\\.", convert = TRUE) %>%
+  rowwise() %>%
+  mutate(
+    Topological_sequence = substr(Sequence, start, end)
+  ) %>%
+  ungroup()
+
+# Extract the transmembrane information
+dataframe <- dataframe %>%
+  mutate(
+    Transmembrane = str_split(Transmembrane, "(?=TRANSMEM)", simplify = FALSE)
+  ) %>%
+  unnest_longer(Transmembrane) %>%
+  mutate(
+    transmem_start = as.numeric(str_extract(Transmembrane, "(?<=TRANSMEM )[0-9]+")),
+    transmem_end = as.numeric(str_extract(Transmembrane, "(?<=\\.\\.)[0-9]+")),
+    Topological_location = ifelse(!is.na(transmem_start) & !is.na(transmem_end), "Transmembrane", Topological_location)
+  ) %>%
+  rowwise() %>%
+  mutate(
+    Topological_sequence = ifelse(!is.na(transmem_start) & !is.na(transmem_end), substr(Sequence, transmem_start, transmem_end), Topological_sequence)
+  ) %>%
+  ungroup()
+
+
+# Replace 'start' and 'end' with 'transmem_start' and 'transmem_end' for 'Transmembrane' rows
+dataframe <- dataframe %>%
+  mutate(
+    start = ifelse(Topological_location == "Transmembrane", transmem_start, start),
+    end = ifelse(Topological_location == "Transmembrane", transmem_end, end)
+  ) %>%
+  select(-transmem_start, -transmem_end)
+
+## Remove some useless columns
+dataframe <- dataframe %>%
+  select(-c("Transmembrane", "Topological domain"))
+
+## Remove any extra identical rows
+dataframe <- dataframe %>% 
+  distinct()
+
+# Remove rows with NA in 'Topological_location' column
+dataframe <- dataframe[!is.na(dataframe$Topological_location), ]
+
+
+##### Rename the rare Topological locations
+## Rename the unusual "lumenal-like" Topological locations to "Extracellular" and a few oddballs to Cytoplasmic when indicated
+dataframe <- dataframe %>%
+  mutate(Topological_location = recode(Topological_location, 
+                                        "Lumenal" = "Extracellular",
+                                        "Chloroplast intermembrane" = "Extracellular", 
+                                        "Intravacuolar" = "Extracellular",  
+                                        "Lumenal, vesicle" = "Extracellular", 
+                                        "Lumenal, thylakoid" = "Extracellular", 
+                                        "Lumenal, melanosome" = "Extracellular", 
+                                        "Vesicular" = "Extracellular", 
+                                        "Virion Surface" = "Extracellular",
+                                        "Virion surface" = "Extracellular",
+                                        "Vacuolar" = "Extracellular", 
+                                        "Mitochondrial intermembrane" = "Cytoplasmic", 
+                                        "Mitochondrial matrix" = "Extracellular", 
+                                        "Periplasmic" = "Extracellular", 
+                                        "Peroxisomal" = "Extracellular", 
+                                        "Peroxisomal matrix" = "Extracellular", 
+                                        "Nuclear" = "Extracellular", 
+                                        "Perinuclear space" = "Extracellular", 
+                                        "Stromal" = "Extracellular", 
+                                        "Forespore intermembrane space" = "Extracellular", 
+                                        "Intragranular" = "Extracellular",
+                                        "Exoplasmic loop" = "Extracellular", 
+                                        "Intravirion" = "Cytoplasmic", 
+                                        "Mother cell cytoplasmic" = "Cytoplasmic"))
+
+# print the unique types of Topological_location
+# this is a QC step as there should be only 4 types of Topological_location
+# Transmembrane, Cytoplasmic, and Extracellular
+cat("Unique Topological Locations: ", paste(unique(dataframe$Topological_location), collapse = ", "), "\n")
+
+#### Orientation of transmembrane domains
+
+# Initialize the orientation column
+dataframe$orientation <- "orientation_not_applicable"
+
+# Extract the topological_location from rows with an end that is -1 from the current row's start
+for (group in unique(dataframe$Entry)) {
+  group_rows <- dataframe[dataframe$Entry == group, ]
+  for (i in 1:nrow(group_rows)) {
+    current_row <- group_rows[i, ]
+    matching_rows <- group_rows$end == current_row$start - 1
+    matching_locations <- group_rows$Topological_location[matching_rows]
+    if (any(!is.na(matching_locations))) {
+      dataframe$orientation[dataframe$Entry == group][i] <- matching_locations[!is.na(matching_locations)][1]
+    }
+  }
+}
+
+# Annotate orientation column for inward and outward transmembrane domains
+# note the following two rare annotations were not included for analysis: "In membrane", "Pore forming"
+dataframe <- dataframe %>%
+  mutate(
+    orientation = case_when(
+      Topological_location == "Transmembrane" & orientation %in% c("Extracellular", "Lumenal") ~ "inward",
+      Topological_location == "Transmembrane" & orientation %in% c("Cytoplasmic") ~ "outward",
+      Topological_location == "Transmembrane" ~ "unknown",
+      Topological_location != "Transmembrane" ~ "orientation_not_applicable",
+      TRUE ~ orientation
+    )
+  )
+
+
+### Hand annotating / fixing any missing transmembrane orientations - 6 transmembrane domains required this
+## these seem to have occurred if the preceding domain was only one amino acid and therefore had no end position, only a start position
+dataframe <- dataframe %>%
+  mutate(orientation = if_else(Entry == "P03315" & start == 793, "outward", orientation))
+dataframe <- dataframe %>%
+  mutate(orientation = if_else(Entry == "P08491" & start == 794, "outward", orientation))
+dataframe <- dataframe %>%
+  mutate(orientation = if_else(Entry == "P13285" & start == 319, "inward", orientation))
+dataframe <- dataframe %>%
+  mutate(orientation = if_else(Entry == "P27958" & start == 1851, "outward", orientation))
+dataframe <- dataframe %>%
+  mutate(orientation = if_else(Entry == "Q6DPU3" & start == 16, "inward", orientation))
+dataframe <- dataframe %>%
+  mutate(orientation = if_else(Entry == "Q9WMX2" & start == 1851, "outward", orientation))
+
+
+## Remove rows that lack a topological sequence
+dataframe <- dataframe %>%
+  filter(!is.na(Topological_sequence))
+
+## Determine the counts for Transmembrane Orientation
+# This is a QC step to see how many Transmembrane domains are missing orientation before they are all removed
+# Get counts for all levels of orientation, including NA
+orientation_count <- table(dataframe$orientation, useNA = "ifany")
+
+# Print the counts
+cat("Transmembrane domain orientation assignments:", "\n")
+print(orientation_count)
+
+### Using the type of transmembrane protein to continue assigning the orientation of transmembrane domains
+# For the remaining unknown orientation transmembrane domains, we can use transmembrane_type to determine orientation
+dataframe <- dataframe %>%
+  mutate(
+    orientation = case_when(
+      orientation == "unknown" & transmembrane_type == "type I/III" ~ "inward",
+      orientation == "unknown" & transmembrane_type == "type II/IV" ~ "outward",
+      TRUE ~ orientation
+    )
+  )
+
+# Get counts for all levels of orientation after using the type of protein to help assign
+orientation_count_after_transmembrane_type_assignment <- table(dataframe$orientation, useNA = "ifany")
+
+# Print the counts
+cat("Transmembrane domain orientation assignments after using protein transmembrane type to help complete the assignments:", "\n")
+print(orientation_count_after_transmembrane_type_assignment)
+
+# Remove these transmembrane rows that have unknown orientation
+ dataframe <- dataframe %>%
+   filter(orientation != "unknown")
+
+##### Extract the all the Cysteines from the topological sequences and assign them a position
+# Filter rows with 'C' in 'Topological_sequence' column
+dataframe <- dataframe[grepl('C', dataframe$Topological_sequence), ]
+
+# Find all positions of 'C' in 'Topological_sequence'
+dataframe <- dataframe %>%
+  mutate(all_C_positions = map(Topological_sequence, ~str_locate_all(.x, "C")[[1]][,1] - 1)) 
+
+# Unnest the list-column to create new rows
+dataframe <- dataframe %>%
+  unnest_longer(all_C_positions)
+
+# Remove the ID column created by unnest_longer()
+dataframe <- dataframe %>%
+  select(-all_C_positions_id)
+
+# Add 'start' to 'all_C_positions' to get 'all_topological_cys'
+dataframe <- dataframe %>%
+  mutate(all_topological_cys = start + all_C_positions)
+
+# Remove the 'all_C_positions' column
+dataframe <- dataframe %>%
+  select(-all_C_positions)
+
+# Rename the column to cys_position
+dataframe <- dataframe %>%
+  rename(cys_position = all_topological_cys)
+
+
+###### CYTOPLASMIC FEATURES
+
+###### Annotate the cytoplasmic regions as either head, loop or tail.
+# Initialize cytoplasmic_type column with "cytoplasmic_not_applicable"
+dataframe$cytoplasmic_type <- "cytoplasmic_type_not_applicable"
+
+# Assign "head" to rows with specified Topological_location and start < 5
+dataframe$cytoplasmic_type[dataframe$Topological_location %in% c("Cytoplasmic") & dataframe$start < 5] <- "head"
+
+# Assign "tail" to rows with specified Topological_location and end within 10 of C terminus
+dataframe <- dataframe %>%
+  mutate(
+    cytoplasmic_type = case_when(
+      Topological_location %in% c("Cytoplasmic") & ((Length - end) <= 10) ~ "tail",
+      TRUE ~ cytoplasmic_type
+    )
+  )
+
+# Assign "loop" to remaining rows with specified Topological_location
+dataframe <- dataframe %>%
+  mutate(
+    cytoplasmic_type = ifelse(Topological_location == "Cytoplasmic" & cytoplasmic_type == "cytoplasmic_type_not_applicable", "loop", cytoplasmic_type)
+  )
+
+
+##### EXTRACELLULAR FEATURES (HEAD, LOOP, TAIL)
+
+# Initialize the extracellular_type column with "extracellular_type_not_applicable"
+dataframe$extracellular_type <- "extracellular_type_not_applicable"
+
+# Assign "head" to rows with transmembrane_type = "type I/III" and Top_ological_location = "Extracellular" or "Lumenal"
+dataframe$extracellular_type[dataframe$transmembrane_type == "type I/III" & dataframe$Topological_location %in% c("Extracellular", "Lumenal")] <- "head"
+
+# Assign "tail" to rows with transmembrane_type = "type II/IV" and Topological_location = "Extracellular" or "Lumenal"
+dataframe$extracellular_type[dataframe$transmembrane_type == "type II/IV" & dataframe$Topological_location %in% c("Extracellular", "Lumenal")] <- "tail"
+
+# For multi transmembrane types:
+# Assign "head" to rows with Topological_location = "Extracellular" or "Lumenal" and start < 50
+dataframe$extracellular_type[dataframe$transmembrane_type == "multi" & dataframe$Topological_location %in% c("Extracellular", "Lumenal") & dataframe$start < 50] <- "head"
+
+# Assign "tail" to rows with Topological_location = "Extracellular" or "Lumenal" and end is within 10 of Length
+dataframe$extracellular_type[dataframe$transmembrane_type == "multi" & dataframe$Topological_location %in% c("Extracellular", "Lumenal") & (dataframe$Length - dataframe$end) <= 10] <- "tail"
+
+# Assign "loop" to remaining rows with Topological_location = "Extracellular" or "Lumenal"
+dataframe$extracellular_type[dataframe$transmembrane_type == "multi" & dataframe$Topological_location %in% c("Extracellular", "Lumenal") & dataframe$extracellular_type == "extracellular_type_not_applicable"] <- "loop"
+
+# Determine topological length
+dataframe$Topological_length <- nchar(dataframe$Topological_sequence)
+
+#### Absolute distances of each cysteine from beginning and end of the topology
+dataframe <- dataframe %>%
+  mutate(cys_position_from_topo_start = cys_position - start,
+         cys_position_from_topo_end = end - cys_position)
+
+
+# Relative cys position in topology
+dataframe$relative_cys_position_topology <- (dataframe$cys_position - dataframe$start) / (dataframe$end - dataframe$start)
+
+# Add a column for relative_cys_position_in protein
+dataframe$relative_cys_position_protein <- (dataframe$cys_position - 1) / (dataframe$Length - 1)
+
+# Add a column for cys_distance_from_c_terminus
+dataframe$cys_distance_from_c_terminus <- dataframe$Length - dataframe$cys_position
+
+
+#### OBTAIN WINDOW SEQUENCES (N-Terminal, C-Terminal)
+dataframe <- dataframe %>%
+  rowwise() %>%
+  mutate(
+    start_pos_n = pmax(1, cys_position - 5),
+    end_pos_n = cys_position - 1,
+    start_pos_c = cys_position + 1,
+    end_pos_c = pmin(Length, cys_position + 5),
+    window_sequence_n = ifelse(start_pos_n < cys_position, str_sub(Sequence, start_pos_n, end_pos_n), str_sub(Sequence, 1, end_pos_n)),
+    window_sequence_c = ifelse(cys_position < Length, str_sub(Sequence, start_pos_c, end_pos_c), str_sub(Sequence, start_pos_c, Length))
+  ) %>%
+  ungroup()
+
+# Remove intermediate columns if not needed
+dataframe <- dataframe %>%
+  select(-starts_with("start_pos_"), -ends_with("pos_c"), -end_pos_n)
+
+
+#### WINDOW SEQUENCE CYS SCORE
+# Function to calculate cysteine score for N-terminal sequence
+calculate_cys_score_n <- function(sequence) {
+  sequence <- toupper(sequence)  # Convert to uppercase
+  n <- nchar(sequence)
+  
+  # Initialize score
+  score <- 0
+  
+  # Scoring rules for N-terminal sequence:
+  # - 4 points if the last letter is C
+  # - 2 additional points if the second to last letter is C
+  # - 1 additional point if the third to last letter is C
+  # - 1 additional point if the fourth to last letter is C
+  # - 1 additional point if the fifth to laster letter is C
+  # Scoring for N-terminal
+  if (n >= 1 && substr(sequence, n, n) == "C") score <- score + 4
+  if (n >= 2 && substr(sequence, n-1, n-1) == "C") score <- score + 2
+  if (n >= 3 && substr(sequence, n-2, n-2) == "C") score <- score + 1
+  if (n >= 4 && substr(sequence, n-3, n-3) == "C") score <- score + 1
+  if (n >= 5 && substr(sequence, n-4, n-4) == "C") score <- score + 1
+
+  return(score)
+}
+
+# Function to calculate cysteine score for C-terminal sequence
+calculate_cys_score_c <- function(sequence) {
+  sequence <- toupper(sequence)  # Convert to uppercase
+  
+  # Initialize score
+  score <- 0
+  
+  # Scoring rules for C-terminal sequence:
+  # - 4 points if the first letter is C
+  # - 2 additional points if the second letter is C
+  # - 1 additional point if the third letter is C
+  # - 1 additional point if the fourth letter is C
+  # - 1 additional points if the fifth letter is C
+  # Scoring for C-terminal
+  if (substr(sequence, 1, 1) == "C") score <- score + 4
+  if (nchar(sequence) >= 2 && substr(sequence, 2, 2) == "C") score <- score + 2
+  if (nchar(sequence) >= 3 && substr(sequence, 3, 3) == "C") score <- score + 1
+  if (nchar(sequence) >= 4 && substr(sequence, 4, 4) == "C") score <- score + 1
+  if (nchar(sequence) >= 5 && substr(sequence, 5, 5) == "C") score <- score + 1
+
+  return(score)
+}
+
+# Apply the functions to the columns of the dataframe
+dataframe$window_cys_score_n <- sapply(dataframe$window_sequence_n, calculate_cys_score_n)
+dataframe$window_cys_score_c <- sapply(dataframe$window_sequence_c, calculate_cys_score_c)
+
+
+#### HYDROPHOBICITY 
+# Kyte J., Doolittle R.F., J. Mol. Biol. 157:105-132(1982).
+
+# Define the hydrophobicity scale for each amino acid
+hydrophobicity_scale <- c(A = 1.8, R = -4.5, N = -3.5, D = -3.5, C = 2.5, Q = -3.5,
+                          E = -3.5, G = -0.4, H = -3.2, I = 4.5, L = 3.8, K = -3.9,
+                          M = 1.9, F = 2.8, P = -1.6, S = -0.8, T = -0.7, W = -0.9,
+                          Y = -1.3, V = 4.2)
+
+# Function to calculate hydrophobicity for a given amino acid sequence
+calculate_hydrophobicity <- function(sequence) {
+  sequence <- toupper(sequence)
+  if (nchar(sequence) == 0) {
+    # Return 0 (or another default value) if there's no sequence
+    return(0)
+  } else {
+    hydrophobicity <- sum(hydrophobicity_scale[strsplit(sequence, "")[[1]]])
+    average_hydrophobicity <- hydrophobicity / length(strsplit(sequence, "")[[1]])
+    return(average_hydrophobicity)
+  }
+}
+
+# Calculate hydrophobicity for window_sequence_n_terminal and window_sequence_c_terminal
+dataframe$window_n_hydrophobicity <- sapply(dataframe$window_sequence_n, calculate_hydrophobicity)
+dataframe$window_c_hydrophobicity <- sapply(dataframe$window_sequence_c, calculate_hydrophobicity)
+
+
+## Hydrophilicity
+# Hopp T.P., Woods K.R., Proc. Natl. Acad. Sci. U.S.A. 78:3824-3828(1981).
+
+# Define the hydrophilicity scale for each amino acid
+hydrophilicity_scale <- c(A = -0.500, R = 3.000, N = 0.200, D = 3.000, C = -1.000,
+                          Q = 0.200, E = 3.000, G = 0.000, H = -0.500, I = -1.800,
+                          L = -1.800, K = 3.000, M = -1.300, F = -2.500, P = 0.000,
+                          S = 0.300, T = -0.400, W = -3.400, Y = -2.300, V = -1.500)
+
+# Function to calculate hydrophilicity for a given amino acid sequence
+calculate_hydrophilicity <- function(sequence) {
+  sequence <- toupper(sequence)
+  if (nchar(sequence) == 0) {
+    return(0) # Return 0 if there's no sequence
+  } else {
+    hydrophilicity <- sum(hydrophilicity_scale[strsplit(sequence, "")[[1]]])
+    average_hydrophilicity <- hydrophilicity / length(strsplit(sequence, "")[[1]])
+    return(average_hydrophilicity)
+  }
+}
+
+# Calculate hydrophilicity for window_sequence_n_terminal and window_sequence_c_terminal
+dataframe$window_n_hydrophilicity <- sapply(dataframe$window_sequence_n, calculate_hydrophilicity)
+dataframe$window_c_hydrophilicity <- sapply(dataframe$window_sequence_c, calculate_hydrophilicity)
+
+
+## NET CHARGE
+# Function to calculate NET charge for a given amino acid sequence, including half charge for Histidine (H)
+calculate_net_charge <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Count the number of basic amino acids (R and K) and acidic amino acids (D and E)
+    basic_charge <- sum(str_count(sequence, "R|K"))
+    acidic_charge <- sum(str_count(sequence, "D|E"))
+
+    # Count the number of histidine (H) residues and consider half charge for each
+    histidine_charge <- sum(str_count(sequence, "H")) * 0.5
+  
+    # Calculate the net charge
+    net_charge <- basic_charge - acidic_charge + histidine_charge
+  
+    # Return the net charge value
+    return(net_charge)
+  }
+}
+
+# apply the function to calculate net charge for the _n_terminal and _c_terminal
+dataframe$window_net_charge_n <- sapply(dataframe$window_sequence_n, calculate_net_charge)
+dataframe$window_net_charge_c <- sapply(dataframe$window_sequence_c, calculate_net_charge)
+
+
+## ABSOLUTE CHARGE
+# Function to calculate ABSOLUTE charge for a given amino acid sequence, including half charge for Histidine (H)
+calculate_abs_charge <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Count the number of basic amino acids (R and K) and acidic amino acids (D and E)
+    basic_charge <- sum(str_count(sequence, "R|K"))
+    acidic_charge <- sum(str_count(sequence, "D|E"))
+
+    # Count the number of histidine (H) residues and consider half charge for each
+    histidine_charge <- sum(str_count(sequence, "H")) * 0.5
+  
+    # Calculate the absolute charge
+    abs_charge <- basic_charge + acidic_charge + histidine_charge
+  
+    # Return the absolute charge value
+    return(abs_charge)
+  }
+}
+
+# apply the function to calculate absolute charge for the _n_terminal and _c_terminal
+dataframe$window_abs_charge_n <- sapply(dataframe$window_sequence_n, calculate_abs_charge)
+dataframe$window_abs_charge_c <- sapply(dataframe$window_sequence_c, calculate_abs_charge)
+
+
+#### Aliphatic index
+# Aliphatic index scale with coefficients for valine and Leu/Ile side chains
+aliphatic_scale <- c(A = 1, V = 2.9, I = 3.9, L = 3.9)
+
+# Function to calculate aliphatic index for a given amino acid sequence
+calculate_aliphatic_index <- function(sequence) {
+  sequence <- toupper(sequence) # Convert to upper case to handle lower case inputs
+  split_sequence <- strsplit(sequence, "")[[1]]
+
+  # Check if the sequence is empty
+  if (length(split_sequence) == 0) {
+    return(0) # Return 0 for empty sequence
+  } else {
+    aliphatic_values <- aliphatic_scale[split_sequence]
+    aliphatic_index <- sum(aliphatic_values, na.rm = TRUE) / length(aliphatic_values)
+    return(aliphatic_index)
+  }
+}
+
+# Apply the function to calculate aliphatic index for _n_terminal and _c_terminal
+dataframe$window_aliphatic_n <- sapply(dataframe$window_sequence_n, calculate_aliphatic_index)
+dataframe$window_aliphatic_c <- sapply(dataframe$window_sequence_c, calculate_aliphatic_index)
+
+
+### Aromatic
+# Function to calculate aromatic count for a given amino acid sequence
+calculate_aromatic_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define the aromatic amino acids
+    aromatic_amino_acids <- c("F", "Y", "W")
+
+    # Calculate the aromatic count
+    aromatic_count <- sum(strsplit(sequence, "")[[1]] %in% aromatic_amino_acids)
+
+    # Return the aromatic count
+    return(aromatic_count)
+  }
+}
+
+# Apply the function to calculate aromatic count for _n_terminal and _c_terminal
+dataframe$window_aromatic_n <- sapply(dataframe$window_sequence_n, calculate_aromatic_count)
+dataframe$window_aromatic_c <- sapply(dataframe$window_sequence_c, calculate_aromatic_count)
+
+
+### Asparagine score
+# Function to calculate asparagine count for a given amino acid sequence
+calculate_asparagine_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define asparagine
+    asparagine <- "N"
+
+    # Calculate the asparagine count
+    asparagine_count <- sum(strsplit(sequence, "")[[1]] == asparagine)
+
+    # Return the tyrosine count
+    return(asparagine_count)
+  }
+}
+
+# Apply the function to calculate asparagine count for _n_terminal and _c_terminal
+dataframe$window_asparagine_n <- sapply(dataframe$window_sequence_n, calculate_asparagine_count)
+dataframe$window_asparagine_c <- sapply(dataframe$window_sequence_c, calculate_asparagine_count)
+
+# Function to calculate combined aspartate (D) and glutamate (E) count for a given amino acid sequence
+calculate_asp_glu_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define aspartate and glutamate
+    aspartate <- "D"
+    glutamate <- "E"
+
+    # Calculate the combined count of aspartate and glutamate
+    asp_glu_count <- sum(strsplit(sequence, "")[[1]] == aspartate) +
+                     sum(strsplit(sequence, "")[[1]] == glutamate)
+
+    # Return the combined count
+    return(asp_glu_count)
+  }
+}
+
+# Apply the function to calculate combined aspartate and glutamate count for _n_terminal and _c_terminal
+dataframe$window_asp_glu_n <- sapply(dataframe$window_sequence_n, calculate_asp_glu_count)
+dataframe$window_asp_glu_c <- sapply(dataframe$window_sequence_c, calculate_asp_glu_count)
+
+
+### Tyrosine score
+# Function to calculate tyrosine count for a given amino acid sequence
+calculate_tyrosine_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define tyrosine
+    tyrosine <- "Y"
+
+    # Calculate the tyrosine count
+    tyrosine_count <- sum(strsplit(sequence, "")[[1]] == tyrosine)
+
+    # Return the tyrosine count
+    return(tyrosine_count)
+  }
+}
+
+# Apply the function to calculate tyrosine count for _n_terminal and _c_terminal
+dataframe$window_tyrosine_n <- sapply(dataframe$window_sequence_n, calculate_tyrosine_count)
+dataframe$window_tyrosine_c <- sapply(dataframe$window_sequence_c, calculate_tyrosine_count)
+
+
+### Tryptophan score
+# Function to calculate tryptophan count for a given amino acid sequence
+calculate_tryptophan_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define tryptophan
+    tryptophan <- "W"
+
+    # Calculate the tryptophan count
+    tryptophan_count <- sum(strsplit(sequence, "")[[1]] == tryptophan)
+
+    # Return the tryptophan count
+    return(tryptophan_count)
+  }
+}
+
+# Apply the function to calculate tryptophan count for _n_terminal and _c_terminal
+dataframe$window_tryptophan_n <- sapply(dataframe$window_sequence_n, calculate_tryptophan_count)
+dataframe$window_tryptophan_c <- sapply(dataframe$window_sequence_c, calculate_tryptophan_count)
+
+
+##### Histidine score
+# Function to calculate histidine count for a given amino acid sequence
+calculate_histidine_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define the histidine amino acid
+    histidine_amino_acid <- "H"
+
+    # Calculate the histidine count
+    histidine_count <- sum(strsplit(sequence, "")[[1]] == histidine_amino_acid)
+
+    # Return the histidine count
+    return(histidine_count)
+  }
+}
+
+# Apply the function to calculate histidine count for _n_terminal and _c_terminal
+dataframe$window_histidine_n <- sapply(dataframe$window_sequence_n, calculate_histidine_count)
+dataframe$window_histidine_c <- sapply(dataframe$window_sequence_c, calculate_histidine_count)
+
+
+### PHENYLALANINE
+# Function to calculate phenylalanine count for a given amino acid sequence
+calculate_phenylalanine_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define the phenylalanine amino acid
+    phenylalanine_amino_acid <- "F"
+
+    # Calculate the phenylalanine count
+    phenylalanine_count <- sum(strsplit(sequence, "")[[1]] == phenylalanine_amino_acid)
+
+    # Return the phenylalanine count
+    return(phenylalanine_count)
+  }
+}
+
+# Apply the function to calculate phenylalanine count for _n_terminal and _c_terminal
+dataframe$window_phenylalanine_n <- sapply(dataframe$window_sequence_n, calculate_phenylalanine_count)
+dataframe$window_phenylalanine_c <- sapply(dataframe$window_sequence_c, calculate_phenylalanine_count)
+
+
+# Polar Amino Acids Scale
+# Grantham R., Science 185:862-864(1974).
+polar_scale <- c(A = 8.100, R = 10.500, N = 11.600, D = 13.000, C = 5.500, 
+                 Q = 10.500, E = 12.300, G = 9.000, H = 10.400, I = 5.200, 
+                 L = 4.900, K = 11.300, M = 5.700, F = 5.200, P = 8.000, 
+                 S = 9.200, T = 8.600, W = 5.400, Y = 6.200, V = 5.900)
+
+# Function to calculate polar index for a given amino acid sequence
+calculate_polar_index <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    sequence <- toupper(sequence) # Convert to upper case to handle lower case inputs
+    polar_values <- polar_scale[strsplit(sequence, "")[[1]]]
+    polar_index <- sum(polar_values, na.rm = TRUE) / length(polar_values)
+    return(polar_index)
+  }
+}
+
+# Apply the function to calculate polar index for _n_terminal and _c_terminal
+dataframe$window_polar_n <- sapply(dataframe$window_sequence_n, calculate_polar_index)
+dataframe$window_polar_c <- sapply(dataframe$window_sequence_c, calculate_polar_index)
+
+# Apply the function to calculate polar index for _n_terminal and _c_terminal
+dataframe$window_polar_n <- sapply(dataframe$window_sequence_n, calculate_polar_index)
+dataframe$window_polar_c <- sapply(dataframe$window_sequence_c, calculate_polar_index)
+
+
+# Side Chain Bulkiness Scale
+# Zimmerman J.M., Eliezer N., Simha R., J. Theor. Biol. 21:170-201(1968).
+bulkiness_scale <- c(A = 11.500, R = 14.280, N = 12.820, D = 11.680, C = 13.460, 
+                     Q = 14.450, E = 13.570, G = 3.400, H = 13.690, I = 21.400, 
+                     L = 21.400, K = 15.710, M = 16.250, F = 19.800, P = 17.430, 
+                     S = 9.470, T = 15.770, W = 21.670, Y = 18.030, V = 21.570)
+
+# Function to calculate side chain bulkiness index for a given amino acid sequence
+calculate_side_chain_bulkiness_index <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    sequence <- toupper(sequence) # Convert to upper case to handle lower case inputs
+    bulkiness_values <- bulkiness_scale[strsplit(sequence, "")[[1]]]
+    bulkiness_index <- sum(bulkiness_values, na.rm = TRUE) / length(bulkiness_values)
+    return(bulkiness_index)
+  }
+}
+
+# Apply the function to calculate side chain bulkiness index for _n_terminal and _c_terminal
+dataframe$window_bulkiness_n <- sapply(dataframe$window_sequence_n, calculate_side_chain_bulkiness_index)
+dataframe$window_bulkiness_c <- sapply(dataframe$window_sequence_c, calculate_side_chain_bulkiness_index)
+
+
+# Flexibility Scale
+# Bhaskaran R., Ponnuswamy P.K., Int. J. Pept. Protein. Res. 32:242-255(1988).
+flexibility_scale <- c(A = 0.360, R = 0.530, N = 0.460, D = 0.510, C = 0.350, 
+                       Q = 0.490, E = 0.500, G = 0.540, H = 0.320, I = 0.460, 
+                       L = 0.370, K = 0.470, M = 0.300, F = 0.310, P = 0.510, 
+                       S = 0.510, T = 0.440, W = 0.310, Y = 0.420, V = 0.390)
+
+# Function to calculate flexibility index for a given amino acid sequence
+calculate_flexibility_index <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    sequence <- toupper(sequence) # Convert to upper case to handle lower case inputs
+    flexibility_values <- flexibility_scale[strsplit(sequence, "")[[1]]]
+    flexibility_index <- sum(flexibility_values, na.rm = TRUE) / length(flexibility_values)
+    return(flexibility_index)
+  }
+}
+
+# Apply the function to calculate flexibility index for _n_terminal and _c_terminal
+dataframe$window_flexibility_n <- sapply(dataframe$window_sequence_n, calculate_flexibility_index)
+dataframe$window_flexibility_c <- sapply(dataframe$window_sequence_c, calculate_flexibility_index)
+
+
+# Buried Index Scale
+# Janin J., Nature 277:491-492(1979).
+buried_scale <- c(A = 11.200, R = 0.500, N = 2.900, D = 2.900, C = 4.100, 
+                  Q = 1.600, E = 1.800, G = 11.800, H = 2.000, I = 8.600, 
+                  L = 11.700, K = 0.500, M = 1.900, F = 5.100, P = 2.700, 
+                  S = 8.000, T = 4.900, W = 2.200, Y = 2.600, V = 12.900)
+
+# Function to calculate buried index for a given amino acid sequence
+calculate_buried_index <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    sequence <- toupper(sequence) # Convert to upper case to handle lower case inputs
+    buried_values <- buried_scale[strsplit(sequence, "")[[1]]]
+    buried_index <- sum(buried_values, na.rm = TRUE) / length(buried_values)
+    return(buried_index)
+  }
+}
+
+# Apply the function to calculate buried index for _n_terminal and _c_terminal
+dataframe$window_buried_n <- sapply(dataframe$window_sequence_n, calculate_buried_index)
+dataframe$window_buried_c <- sapply(dataframe$window_sequence_c, calculate_buried_index)
+
+
+# Transmembrane Tendency Scale
+# Zhao, G., London E., Protein Sci. 15:1987-2001(2006).
+transmembrane_tendency_scale <- c(A = 0.380, R = -2.570, N = -1.620, D = -3.270, C = -0.300, 
+                                  Q = -1.840, E = -2.900, G = -0.190, H = -1.440, I = 1.970, 
+                                  L = 1.820, K = -3.460, M = 1.400, F = 1.980, P = -1.440, 
+                                  S = -0.530, T = -0.320, W = 1.530, Y = 0.490, V = 1.460)
+
+# Function to calculate transmembrane tendency index for a given amino acid sequence
+calculate_transmembrane_tendency_index <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    sequence <- toupper(sequence) # Convert to upper case to handle lower case inputs
+    transmembrane_tendency_values <- transmembrane_tendency_scale[strsplit(sequence, "")[[1]]]
+    transmembrane_tendency_index <- sum(transmembrane_tendency_values, na.rm = TRUE) / length(transmembrane_tendency_values)
+    return(transmembrane_tendency_index)
+  }
+}
+
+# Apply the function to calculate transmembrane tendency index for _n_terminal and _c_terminal
+dataframe$window_transmembrane_tendency_n <- sapply(dataframe$window_sequence_n, calculate_transmembrane_tendency_index)
+dataframe$window_transmembrane_tendency_c <- sapply(dataframe$window_sequence_c, calculate_transmembrane_tendency_index)
+
+## print the final counts
+columns_to_count <- c("transmembrane_type", "Topological_location", "orientation", "cytoplasmic_type", "extracellular_type")
+
+for(column_name in columns_to_count) {
+  cat("Counts based on", column_name, ":\n")
+  print(table(dataframe[[column_name]]))
+  cat("\n")
+}
+
+  return(dataframe)
+}
+
+
+```
+
+
+
+
+## Defining a function for topology and feature extraction (topopalmtree_feature_extract_rev_3) - PROTSCALE MEASUREMENTS
+## window sequence = 5 on each side
+## separate _n and _c scores for each side of the cysteine (N vs C) - removed the "total" and "gradient" scores
+## dividing measurements by the length of each sequence
+## Mitochondrial intermembrane now considered "cytoplasmic" to ensure correct assignment for PLS3 in training
+## Asparagine score added
+## adjacent_asp_glu score added
+## Hydrophilicity
+
+```{r}
+library(tidyverse)
+
+topopalmtree_feature_extract_rev3 <- function(dataframe) {
+  
+# Create new column 'transmembrane_type' based on conditions
+dataframe <- dataframe %>%
+  mutate(transmembrane_type = case_when(
+    grepl("Multi-pass", `Subcellular location [CC]`, ignore.case = TRUE) ~ "multi",
+    grepl("Single-pass membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type I/III",
+    grepl("Single-pass type I membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type I/III",
+    grepl("Single-pass type II membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type II/IV",
+    grepl("Single-pass type III membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type I/III",
+    grepl("Single-pass type IV membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type II/IV"
+  ))
+
+# Remove rows where 'transmembrane_type' is NA
+dataframe <- dataframe %>%
+  filter(!is.na(transmembrane_type))
+
+# Remove the subcellular location column now that information has been extracted into new column
+dataframe <- dataframe %>% 
+  select(-`Subcellular location [CC]`)
+
+#### Extract the topology features into new columns
+
+# Split up the information in Topological domain column into individual rows based on each topology
+# this code also handles the situations where the topological domain is only 1 amino acid, as often happens for tiny loop regions
+dataframe <- dataframe %>%
+  mutate(
+    `Topological domain` = str_split(`Topological domain`, "(?=TOPO_DOM)", simplify = FALSE)
+  ) %>%
+  unnest_longer(`Topological domain`) %>%
+  mutate(
+    Sequence_range = str_extract(`Topological domain`, "(?<=TOPO_DOM )[0-9]+\\.\\.?[0-9]*|(?<=TOPO_DOM )[0-9]+"),
+    Topological_location = str_extract(`Topological domain`, "(?<=/note=\")[A-Za-z ]+(?=\")")
+  ) %>%
+  mutate(
+    Sequence_range = ifelse(str_detect(Sequence_range, "\\.."), Sequence_range, paste0(Sequence_range, "..", Sequence_range))
+  )
+
+# Separate 'x' and 'y' from 'Sequence_range', extract sequence, and keep 'Sequence' column
+dataframe <- dataframe %>%
+  separate(col = Sequence_range, into = c("start", "end"), sep = "\\.\\.", convert = TRUE) %>%
+  rowwise() %>%
+  mutate(
+    Topological_sequence = substr(Sequence, start, end)
+  ) %>%
+  ungroup()
+
+# Extract the transmembrane information
+dataframe <- dataframe %>%
+  mutate(
+    Transmembrane = str_split(Transmembrane, "(?=TRANSMEM)", simplify = FALSE)
+  ) %>%
+  unnest_longer(Transmembrane) %>%
+  mutate(
+    transmem_start = as.numeric(str_extract(Transmembrane, "(?<=TRANSMEM )[0-9]+")),
+    transmem_end = as.numeric(str_extract(Transmembrane, "(?<=\\.\\.)[0-9]+")),
+    Topological_location = ifelse(!is.na(transmem_start) & !is.na(transmem_end), "Transmembrane", Topological_location)
+  ) %>%
+  rowwise() %>%
+  mutate(
+    Topological_sequence = ifelse(!is.na(transmem_start) & !is.na(transmem_end), substr(Sequence, transmem_start, transmem_end), Topological_sequence)
+  ) %>%
+  ungroup()
+
+
+# Replace 'start' and 'end' with 'transmem_start' and 'transmem_end' for 'Transmembrane' rows
+dataframe <- dataframe %>%
+  mutate(
+    start = ifelse(Topological_location == "Transmembrane", transmem_start, start),
+    end = ifelse(Topological_location == "Transmembrane", transmem_end, end)
+  ) %>%
+  select(-transmem_start, -transmem_end)
+
+## Remove some useless columns
+dataframe <- dataframe %>%
+  select(-c("Transmembrane", "Topological domain"))
+
+## Remove any extra identical rows
+dataframe <- dataframe %>% 
+  distinct()
+
+# Remove rows with NA in 'Topological_location' column
+dataframe <- dataframe[!is.na(dataframe$Topological_location), ]
+
+
+##### Rename the rare Topological locations
+## Rename the unusual "lumenal-like" Topological locations to "Extracellular" and a few oddballs to Cytoplasmic when indicated
+dataframe <- dataframe %>%
+  mutate(Topological_location = recode(Topological_location, 
+                                        "Lumenal" = "Extracellular",
+                                        "Chloroplast intermembrane" = "Extracellular", 
+                                        "Intravacuolar" = "Extracellular",  
+                                        "Lumenal, vesicle" = "Extracellular", 
+                                        "Lumenal, thylakoid" = "Extracellular", 
+                                        "Lumenal, melanosome" = "Extracellular", 
+                                        "Vesicular" = "Extracellular", 
+                                        "Virion Surface" = "Extracellular", 
+                                        "Vacuolar" = "Extracellular", 
+                                        "Mitochondrial intermembrane" = "Cytoplasmic", 
+                                        "Mitochondrial matrix" = "Extracellular", 
+                                        "Periplasmic" = "Extracellular", 
+                                        "Peroxisomal" = "Extracellular", 
+                                        "Peroxisomal matrix" = "Extracellular", 
+                                        "Nuclear" = "Extracellular", 
+                                        "Perinuclear space" = "Extracellular", 
+                                        "Stromal" = "Extracellular", 
+                                        "Forespore intermembrane space" = "Extracellular", 
+                                        "Intragranular" = "Extracellular",
+                                        "Exoplasmic loop" = "Extracellular", 
+                                        "Intravirion" = "Cytoplasmic", 
+                                        "Mother cell cytoplasmic" = "Cytoplasmic"))
+
+# print the unique types of Topological_location
+# this is a QC step as there should be only 4 types of Topological_location
+# Transmembrane, Cytoplasmic, and Extracellular
+cat("Unique Topological Locations: ", paste(unique(dataframe$Topological_location), collapse = ", "), "\n")
+
+#### Orientation of transmembrane domains
+
+# Initialize the orientation column
+dataframe$orientation <- "orientation_not_applicable"
+
+# Extract the topological_location from rows with an end that is -1 from the current row's start
+for (group in unique(dataframe$Entry)) {
+  group_rows <- dataframe[dataframe$Entry == group, ]
+  for (i in 1:nrow(group_rows)) {
+    current_row <- group_rows[i, ]
+    matching_rows <- group_rows$end == current_row$start - 1
+    matching_locations <- group_rows$Topological_location[matching_rows]
+    if (any(!is.na(matching_locations))) {
+      dataframe$orientation[dataframe$Entry == group][i] <- matching_locations[!is.na(matching_locations)][1]
+    }
+  }
+}
+
+# Annotate orientation column for inward and outward transmembrane domains
+# note the following two rare annotations were not included for analysis: "In membrane", "Pore forming"
+dataframe <- dataframe %>%
+  mutate(
+    orientation = case_when(
+      Topological_location == "Transmembrane" & orientation %in% c("Extracellular", "Lumenal") ~ "inward",
+      Topological_location == "Transmembrane" & orientation %in% c("Cytoplasmic") ~ "outward",
+      Topological_location == "Transmembrane" ~ "unknown",
+      Topological_location != "Transmembrane" ~ "orientation_not_applicable",
+      TRUE ~ orientation
+    )
+  )
+
+## Remove rows that lack a topological sequence
+dataframe <- dataframe %>%
+  filter(!is.na(Topological_sequence))
+
+## Determine the counts for Transmembrane Orientation
+# This is a QC step to see how many Transmembrane domains are missing orientation before they are all removed
+# Get counts for all levels of orientation, including NA
+orientation_count <- table(dataframe$orientation, useNA = "ifany")
+
+# Print the counts
+cat("Transmembrane domain orientation assignments:", "\n")
+print(orientation_count)
+
+### Using the type of transmembrane protein to continue assigning the orientation of transmembrane domains
+# For the remaining unknown orientation transmembrane domains, we can use transmembrane_type to determine orientation
+dataframe <- dataframe %>%
+  mutate(
+    orientation = case_when(
+      orientation == "unknown" & transmembrane_type == "type I/III" ~ "inward",
+      orientation == "unknown" & transmembrane_type == "type II/IV" ~ "outward",
+      TRUE ~ orientation
+    )
+  )
+
+# Get counts for all levels of orientation after using the type of protein to help assign
+orientation_count_after_transmembrane_type_assignment <- table(dataframe$orientation, useNA = "ifany")
+
+# Print the counts
+cat("Transmembrane domain orientation assignments after using protein transmembrane type to help complete the assignments:", "\n")
+print(orientation_count_after_transmembrane_type_assignment)
+
+
+##### Extract the all the Cysteines from the topological sequences and assign them a position
+# Filter rows with 'C' in 'Topological_sequence' column
+dataframe <- dataframe[grepl('C', dataframe$Topological_sequence), ]
+
+# Find all positions of 'C' in 'Topological_sequence'
+dataframe <- dataframe %>%
+  mutate(all_C_positions = map(Topological_sequence, ~str_locate_all(.x, "C")[[1]][,1] - 1)) 
+
+# Unnest the list-column to create new rows
+dataframe <- dataframe %>%
+  unnest_longer(all_C_positions)
+
+# Remove the ID column created by unnest_longer()
+dataframe <- dataframe %>%
+  select(-all_C_positions_id)
+
+# Add 'start' to 'all_C_positions' to get 'all_topological_cys'
+dataframe <- dataframe %>%
+  mutate(all_topological_cys = start + all_C_positions)
+
+# Remove the 'all_C_positions' column
+dataframe <- dataframe %>%
+  select(-all_C_positions)
+
+# Rename the column to cys_position
+dataframe <- dataframe %>%
+  rename(cys_position = all_topological_cys)
+
+
+###### CYTOPLASMIC FEATURES
+
+###### Annotate the cytoplasmic regions as either head, loop or tail.
+# Initialize cytoplasmic_type column with "cytoplasmic_not_applicable"
+dataframe$cytoplasmic_type <- "cytoplasmic_type_not_applicable"
+
+# Assign "head" to rows with specified Topological_location and start < 5
+dataframe$cytoplasmic_type[dataframe$Topological_location %in% c("Cytoplasmic") & dataframe$start < 5] <- "head"
+
+# Assign "tail" to rows with specified Topological_location and end within 10 of C terminus
+dataframe <- dataframe %>%
+  mutate(
+    cytoplasmic_type = case_when(
+      Topological_location %in% c("Cytoplasmic") & ((Length - end) <= 10) ~ "tail",
+      TRUE ~ cytoplasmic_type
+    )
+  )
+
+# Assign "loop" to remaining rows with specified Topological_location
+dataframe <- dataframe %>%
+  mutate(
+    cytoplasmic_type = ifelse(Topological_location == "Cytoplasmic" & cytoplasmic_type == "cytoplasmic_type_not_applicable", "loop", cytoplasmic_type)
+  )
+
+
+##### EXTRACELLULAR FEATURES (HEAD, LOOP, TAIL)
+
+# Initialize the extracellular_type column with "extracellular_type_not_applicable"
+dataframe$extracellular_type <- "extracellular_type_not_applicable"
+
+# Assign "head" to rows with transmembrane_type = "type I/III" and Top_ological_location = "Extracellular" or "Lumenal"
+dataframe$extracellular_type[dataframe$transmembrane_type == "type I/III" & dataframe$Topological_location %in% c("Extracellular", "Lumenal")] <- "head"
+
+# Assign "tail" to rows with transmembrane_type = "type II/IV" and Topological_location = "Extracellular" or "Lumenal"
+dataframe$extracellular_type[dataframe$transmembrane_type == "type II/IV" & dataframe$Topological_location %in% c("Extracellular", "Lumenal")] <- "tail"
+
+# For multi transmembrane types:
+# Assign "head" to rows with Topological_location = "Extracellular" or "Lumenal" and start < 50
+dataframe$extracellular_type[dataframe$transmembrane_type == "multi" & dataframe$Topological_location %in% c("Extracellular", "Lumenal") & dataframe$start < 50] <- "head"
+
+# Assign "tail" to rows with Topological_location = "Extracellular" or "Lumenal" and end is within 10 of Length
+dataframe$extracellular_type[dataframe$transmembrane_type == "multi" & dataframe$Topological_location %in% c("Extracellular", "Lumenal") & (dataframe$Length - dataframe$end) <= 10] <- "tail"
+
+# Assign "loop" to remaining rows with Topological_location = "Extracellular" or "Lumenal"
+dataframe$extracellular_type[dataframe$transmembrane_type == "multi" & dataframe$Topological_location %in% c("Extracellular", "Lumenal") & dataframe$extracellular_type == "extracellular_type_not_applicable"] <- "loop"
+
+# Determine topological length
+dataframe$Topological_length <- nchar(dataframe$Topological_sequence)
+
+#### Absolute distances of each cysteine from beginning and end of the topology
+dataframe <- dataframe %>%
+  mutate(cys_position_from_topo_start = cys_position - start,
+         cys_position_from_topo_end = end - cys_position)
+
+
+# Relative cys position in topology
+dataframe$relative_cys_position_topology <- (dataframe$cys_position - dataframe$start) / (dataframe$end - dataframe$start)
+
+# Add a column for relative_cys_position_in protein
+dataframe$relative_cys_position_protein <- (dataframe$cys_position - 1) / (dataframe$Length - 1)
+
+# Add a column for cys_distance_from_c_terminus
+dataframe$cys_distance_from_c_terminus <- dataframe$Length - dataframe$cys_position
+
+
+#### OBTAIN WINDOW SEQUENCES (N-Terminal, C-Terminal)
+dataframe <- dataframe %>%
+  rowwise() %>%
+  mutate(
+    start_pos_n = pmax(1, cys_position - 5),
+    end_pos_n = cys_position - 1,
+    start_pos_c = cys_position + 1,
+    end_pos_c = pmin(Length, cys_position + 5),
+    window_sequence_n = ifelse(start_pos_n < cys_position, str_sub(Sequence, start_pos_n, end_pos_n), str_sub(Sequence, 1, end_pos_n)),
+    window_sequence_c = ifelse(cys_position < Length, str_sub(Sequence, start_pos_c, end_pos_c), str_sub(Sequence, start_pos_c, Length))
+  ) %>%
+  ungroup()
+
+# Remove intermediate columns if not needed
+dataframe <- dataframe %>%
+  select(-starts_with("start_pos_"), -ends_with("pos_c"), -end_pos_n)
+
+
+#### WINDOW SEQUENCE CYS SCORE
+# Function to calculate cysteine score for N-terminal sequence
+calculate_cys_score_n <- function(sequence) {
+  sequence <- toupper(sequence)  # Convert to uppercase
+  n <- nchar(sequence)
+  
+  # Initialize score
+  score <- 0
+  
+  # Scoring rules for N-terminal sequence:
+  # - 4 points if the last letter is C
+  # - 2 additional points if the second to last letter is C
+  # - 1 additional point if the third to last letter is C
+  # - 1 additional point if the fourth to last letter is C
+  # - 1 additional point if the fifth to laster letter is C
+  # Scoring for N-terminal
+  if (n >= 1 && substr(sequence, n, n) == "C") score <- score + 4
+  if (n >= 2 && substr(sequence, n-1, n-1) == "C") score <- score + 2
+  if (n >= 3 && substr(sequence, n-2, n-2) == "C") score <- score + 1
+  if (n >= 4 && substr(sequence, n-3, n-3) == "C") score <- score + 1
+  if (n >= 5 && substr(sequence, n-4, n-4) == "C") score <- score + 1
+
+  return(score)
+}
+
+# Function to calculate cysteine score for C-terminal sequence
+calculate_cys_score_c <- function(sequence) {
+  sequence <- toupper(sequence)  # Convert to uppercase
+  
+  # Initialize score
+  score <- 0
+  
+  # Scoring rules for C-terminal sequence:
+  # - 4 points if the first letter is C
+  # - 2 additional points if the second letter is C
+  # - 1 additional point if the third letter is C
+  # - 1 additional point if the fourth letter is C
+  # - 1 additional points if the fifth letter is C
+  # Scoring for C-terminal
+  if (substr(sequence, 1, 1) == "C") score <- score + 4
+  if (nchar(sequence) >= 2 && substr(sequence, 2, 2) == "C") score <- score + 2
+  if (nchar(sequence) >= 3 && substr(sequence, 3, 3) == "C") score <- score + 1
+  if (nchar(sequence) >= 4 && substr(sequence, 4, 4) == "C") score <- score + 1
+  if (nchar(sequence) >= 5 && substr(sequence, 5, 5) == "C") score <- score + 1
+
+  return(score)
+}
+
+# Apply the functions to the columns of the dataframe
+dataframe$window_cys_score_n <- sapply(dataframe$window_sequence_n, calculate_cys_score_n)
+dataframe$window_cys_score_c <- sapply(dataframe$window_sequence_c, calculate_cys_score_c)
+
+
+#### HYDROPHOBICITY 
+# Kyte J., Doolittle R.F., J. Mol. Biol. 157:105-132(1982).
+
+# Define the hydrophobicity scale for each amino acid
+hydrophobicity_scale <- c(A = 1.8, R = -4.5, N = -3.5, D = -3.5, C = 2.5, Q = -3.5,
+                          E = -3.5, G = -0.4, H = -3.2, I = 4.5, L = 3.8, K = -3.9,
+                          M = 1.9, F = 2.8, P = -1.6, S = -0.8, T = -0.7, W = -0.9,
+                          Y = -1.3, V = 4.2)
+
+# Function to calculate hydrophobicity for a given amino acid sequence
+calculate_hydrophobicity <- function(sequence) {
+  sequence <- toupper(sequence)
+  if (nchar(sequence) == 0) {
+    # Return 0 (or another default value) if there's no sequence
+    return(0)
+  } else {
+    hydrophobicity <- sum(hydrophobicity_scale[strsplit(sequence, "")[[1]]])
+    average_hydrophobicity <- hydrophobicity / length(strsplit(sequence, "")[[1]])
+    return(average_hydrophobicity)
+  }
+}
+
+# Calculate hydrophobicity for window_sequence_n_terminal and window_sequence_c_terminal
+dataframe$window_n_hydrophobicity <- sapply(dataframe$window_sequence_n, calculate_hydrophobicity)
+dataframe$window_c_hydrophobicity <- sapply(dataframe$window_sequence_c, calculate_hydrophobicity)
+
+
+
+## Hydrophilicity
+# Hopp T.P., Woods K.R., Proc. Natl. Acad. Sci. U.S.A. 78:3824-3828(1981).
+
+# Define the hydrophilicity scale for each amino acid
+hydrophilicity_scale <- c(A = -0.500, R = 3.000, N = 0.200, D = 3.000, C = -1.000,
+                          Q = 0.200, E = 3.000, G = 0.000, H = -0.500, I = -1.800,
+                          L = -1.800, K = 3.000, M = -1.300, F = -2.500, P = 0.000,
+                          S = 0.300, T = -0.400, W = -3.400, Y = -2.300, V = -1.500)
+
+# Function to calculate hydrophilicity for a given amino acid sequence
+calculate_hydrophilicity <- function(sequence) {
+  sequence <- toupper(sequence)
+  if (nchar(sequence) == 0) {
+    return(0) # Return 0 if there's no sequence
+  } else {
+    hydrophilicity <- sum(hydrophilicity_scale[strsplit(sequence, "")[[1]]])
+    average_hydrophilicity <- hydrophilicity / length(strsplit(sequence, "")[[1]])
+    return(average_hydrophilicity)
+  }
+}
+
+# Calculate hydrophilicity for window_sequence_n_terminal and window_sequence_c_terminal
+dataframe$window_n_hydrophilicity <- sapply(dataframe$window_sequence_n, calculate_hydrophilicity)
+dataframe$window_c_hydrophilicity <- sapply(dataframe$window_sequence_c, calculate_hydrophilicity)
+
+
+## NET CHARGE
+# Function to calculate NET charge for a given amino acid sequence, including half charge for Histidine (H)
+calculate_net_charge <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Count the number of basic amino acids (R and K) and acidic amino acids (D and E)
+    basic_charge <- sum(str_count(sequence, "R|K"))
+    acidic_charge <- sum(str_count(sequence, "D|E"))
+
+    # Count the number of histidine (H) residues and consider half charge for each
+    histidine_charge <- sum(str_count(sequence, "H")) * 0.5
+  
+    # Calculate the net charge
+    net_charge <- basic_charge - acidic_charge + histidine_charge
+  
+    # Return the net charge value
+    return(net_charge)
+  }
+}
+
+# apply the function to calculate net charge for the _n_terminal and _c_terminal
+dataframe$window_net_charge_n <- sapply(dataframe$window_sequence_n, calculate_net_charge)
+dataframe$window_net_charge_c <- sapply(dataframe$window_sequence_c, calculate_net_charge)
+
+
+## ABSOLUTE CHARGE
+# Function to calculate ABSOLUTE charge for a given amino acid sequence, including half charge for Histidine (H)
+calculate_abs_charge <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Count the number of basic amino acids (R and K) and acidic amino acids (D and E)
+    basic_charge <- sum(str_count(sequence, "R|K"))
+    acidic_charge <- sum(str_count(sequence, "D|E"))
+
+    # Count the number of histidine (H) residues and consider half charge for each
+    histidine_charge <- sum(str_count(sequence, "H")) * 0.5
+  
+    # Calculate the absolute charge
+    abs_charge <- basic_charge + acidic_charge + histidine_charge
+  
+    # Return the absolute charge value
+    return(abs_charge)
+  }
+}
+
+# apply the function to calculate absolute charge for the _n_terminal and _c_terminal
+dataframe$window_abs_charge_n <- sapply(dataframe$window_sequence_n, calculate_abs_charge)
+dataframe$window_abs_charge_c <- sapply(dataframe$window_sequence_c, calculate_abs_charge)
+
+
+#### Aliphatic index
+# Aliphatic index scale with coefficients for valine and Leu/Ile side chains
+aliphatic_scale <- c(A = 1, V = 2.9, I = 3.9, L = 3.9)
+
+# Function to calculate aliphatic index for a given amino acid sequence
+calculate_aliphatic_index <- function(sequence) {
+  sequence <- toupper(sequence) # Convert to upper case to handle lower case inputs
+  split_sequence <- strsplit(sequence, "")[[1]]
+
+  # Check if the sequence is empty
+  if (length(split_sequence) == 0) {
+    return(0) # Return 0 for empty sequence
+  } else {
+    aliphatic_values <- aliphatic_scale[split_sequence]
+    aliphatic_index <- sum(aliphatic_values, na.rm = TRUE) / length(aliphatic_values)
+    return(aliphatic_index)
+  }
+}
+
+# Apply the function to calculate aliphatic index for _n_terminal and _c_terminal
+dataframe$window_aliphatic_n <- sapply(dataframe$window_sequence_n, calculate_aliphatic_index)
+dataframe$window_aliphatic_c <- sapply(dataframe$window_sequence_c, calculate_aliphatic_index)
+
+
+### Aromatic
+# Function to calculate aromatic count for a given amino acid sequence
+calculate_aromatic_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define the aromatic amino acids
+    aromatic_amino_acids <- c("F", "Y", "W")
+
+    # Calculate the aromatic count
+    aromatic_count <- sum(strsplit(sequence, "")[[1]] %in% aromatic_amino_acids)
+
+    # Return the aromatic count
+    return(aromatic_count)
+  }
+}
+
+# Apply the function to calculate aromatic count for _n_terminal and _c_terminal
+dataframe$window_aromatic_n <- sapply(dataframe$window_sequence_n, calculate_aromatic_count)
+dataframe$window_aromatic_c <- sapply(dataframe$window_sequence_c, calculate_aromatic_count)
+
+
+### Asparagine score
+# Function to calculate asparagine count for a given amino acid sequence
+calculate_asparagine_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define asparagine
+    asparagine <- "N"
+
+    # Calculate the asparagine count
+    asparagine_count <- sum(strsplit(sequence, "")[[1]] == asparagine)
+
+    # Return the tyrosine count
+    return(asparagine_count)
+  }
+}
+
+# Apply the function to calculate asparagine count for _n_terminal and _c_terminal
+dataframe$window_asparagine_n <- sapply(dataframe$window_sequence_n, calculate_asparagine_count)
+dataframe$window_asparagine_c <- sapply(dataframe$window_sequence_c, calculate_asparagine_count)
+
+
+# Function to calculate combined aspartate (D) and glutamate (E) count for a given amino acid sequence
+calculate_asp_glu_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define aspartate and glutamate
+    aspartate <- "D"
+    glutamate <- "E"
+
+    # Calculate the combined count of aspartate and glutamate
+    asp_glu_count <- sum(strsplit(sequence, "")[[1]] == aspartate) +
+                     sum(strsplit(sequence, "")[[1]] == glutamate)
+
+    # Return the combined count
+    return(asp_glu_count)
+  }
+}
+
+# Apply the function to calculate combined aspartate and glutamate count for _n_terminal and _c_terminal
+dataframe$window_asp_glu_n <- sapply(dataframe$window_sequence_n, calculate_asp_glu_count)
+dataframe$window_asp_glu_c <- sapply(dataframe$window_sequence_c, calculate_asp_glu_count)
+
+
+### Tyrosine score
+# Function to calculate tyrosine count for a given amino acid sequence
+calculate_tyrosine_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define tyrosine
+    tyrosine <- "Y"
+
+    # Calculate the tyrosine count
+    tyrosine_count <- sum(strsplit(sequence, "")[[1]] == tyrosine)
+
+    # Return the tyrosine count
+    return(tyrosine_count)
+  }
+}
+
+# Apply the function to calculate tyrosine count for _n_terminal and _c_terminal
+dataframe$window_tyrosine_n <- sapply(dataframe$window_sequence_n, calculate_tyrosine_count)
+dataframe$window_tyrosine_c <- sapply(dataframe$window_sequence_c, calculate_tyrosine_count)
+
+
+### Tryptophan score
+# Function to calculate tryptophan count for a given amino acid sequence
+calculate_tryptophan_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define tryptophan
+    tryptophan <- "W"
+
+    # Calculate the tryptophan count
+    tryptophan_count <- sum(strsplit(sequence, "")[[1]] == tryptophan)
+
+    # Return the tryptophan count
+    return(tryptophan_count)
+  }
+}
+
+# Apply the function to calculate tryptophan count for _n_terminal and _c_terminal
+dataframe$window_tryptophan_n <- sapply(dataframe$window_sequence_n, calculate_tryptophan_count)
+dataframe$window_tryptophan_c <- sapply(dataframe$window_sequence_c, calculate_tryptophan_count)
+
+
+
+##### Histidine score
+# Function to calculate histidine count for a given amino acid sequence
+calculate_histidine_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define the histidine amino acid
+    histidine_amino_acid <- "H"
+
+    # Calculate the histidine count
+    histidine_count <- sum(strsplit(sequence, "")[[1]] == histidine_amino_acid)
+
+    # Return the histidine count
+    return(histidine_count)
+  }
+}
+
+# Apply the function to calculate histidine count for _n_terminal and _c_terminal
+dataframe$window_histidine_n <- sapply(dataframe$window_sequence_n, calculate_histidine_count)
+dataframe$window_histidine_c <- sapply(dataframe$window_sequence_c, calculate_histidine_count)
+
+
+### PHENYLALANINE
+# Function to calculate phenylalanine count for a given amino acid sequence
+calculate_phenylalanine_count <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    # Define the phenylalanine amino acid
+    phenylalanine_amino_acid <- "F"
+
+    # Calculate the phenylalanine count
+    phenylalanine_count <- sum(strsplit(sequence, "")[[1]] == phenylalanine_amino_acid)
+
+    # Return the phenylalanine count
+    return(phenylalanine_count)
+  }
+}
+
+# Apply the function to calculate phenylalanine count for _n_terminal and _c_terminal
+dataframe$window_phenylalanine_n <- sapply(dataframe$window_sequence_n, calculate_phenylalanine_count)
+dataframe$window_phenylalanine_c <- sapply(dataframe$window_sequence_c, calculate_phenylalanine_count)
+
+
+# Polar Amino Acids Scale
+# Grantham R., Science 185:862-864(1974).
+polar_scale <- c(A = 8.100, R = 10.500, N = 11.600, D = 13.000, C = 5.500, 
+                 Q = 10.500, E = 12.300, G = 9.000, H = 10.400, I = 5.200, 
+                 L = 4.900, K = 11.300, M = 5.700, F = 5.200, P = 8.000, 
+                 S = 9.200, T = 8.600, W = 5.400, Y = 6.200, V = 5.900)
+
+# Function to calculate polar index for a given amino acid sequence
+calculate_polar_index <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    sequence <- toupper(sequence) # Convert to upper case to handle lower case inputs
+    polar_values <- polar_scale[strsplit(sequence, "")[[1]]]
+    polar_index <- sum(polar_values, na.rm = TRUE) / length(polar_values)
+    return(polar_index)
+  }
+}
+
+# Apply the function to calculate polar index for _n_terminal and _c_terminal
+dataframe$window_polar_n <- sapply(dataframe$window_sequence_n, calculate_polar_index)
+dataframe$window_polar_c <- sapply(dataframe$window_sequence_c, calculate_polar_index)
+
+# Apply the function to calculate polar index for _n_terminal and _c_terminal
+dataframe$window_polar_n <- sapply(dataframe$window_sequence_n, calculate_polar_index)
+dataframe$window_polar_c <- sapply(dataframe$window_sequence_c, calculate_polar_index)
+
+
+# Side Chain Bulkiness Scale
+# Zimmerman J.M., Eliezer N., Simha R., J. Theor. Biol. 21:170-201(1968).
+bulkiness_scale <- c(A = 11.500, R = 14.280, N = 12.820, D = 11.680, C = 13.460, 
+                     Q = 14.450, E = 13.570, G = 3.400, H = 13.690, I = 21.400, 
+                     L = 21.400, K = 15.710, M = 16.250, F = 19.800, P = 17.430, 
+                     S = 9.470, T = 15.770, W = 21.670, Y = 18.030, V = 21.570)
+
+# Function to calculate side chain bulkiness index for a given amino acid sequence
+calculate_side_chain_bulkiness_index <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    sequence <- toupper(sequence) # Convert to upper case to handle lower case inputs
+    bulkiness_values <- bulkiness_scale[strsplit(sequence, "")[[1]]]
+    bulkiness_index <- sum(bulkiness_values, na.rm = TRUE) / length(bulkiness_values)
+    return(bulkiness_index)
+  }
+}
+
+# Apply the function to calculate side chain bulkiness index for _n_terminal and _c_terminal
+dataframe$window_bulkiness_n <- sapply(dataframe$window_sequence_n, calculate_side_chain_bulkiness_index)
+dataframe$window_bulkiness_c <- sapply(dataframe$window_sequence_c, calculate_side_chain_bulkiness_index)
+
+
+# Flexibility Scale
+# Bhaskaran R., Ponnuswamy P.K., Int. J. Pept. Protein. Res. 32:242-255(1988).
+flexibility_scale <- c(A = 0.360, R = 0.530, N = 0.460, D = 0.510, C = 0.350, 
+                       Q = 0.490, E = 0.500, G = 0.540, H = 0.320, I = 0.460, 
+                       L = 0.370, K = 0.470, M = 0.300, F = 0.310, P = 0.510, 
+                       S = 0.510, T = 0.440, W = 0.310, Y = 0.420, V = 0.390)
+
+# Function to calculate flexibility index for a given amino acid sequence
+calculate_flexibility_index <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    sequence <- toupper(sequence) # Convert to upper case to handle lower case inputs
+    flexibility_values <- flexibility_scale[strsplit(sequence, "")[[1]]]
+    flexibility_index <- sum(flexibility_values, na.rm = TRUE) / length(flexibility_values)
+    return(flexibility_index)
+  }
+}
+
+# Apply the function to calculate flexibility index for _n_terminal and _c_terminal
+dataframe$window_flexibility_n <- sapply(dataframe$window_sequence_n, calculate_flexibility_index)
+dataframe$window_flexibility_c <- sapply(dataframe$window_sequence_c, calculate_flexibility_index)
+
+
+# Buried Index Scale
+# Janin J., Nature 277:491-492(1979).
+buried_scale <- c(A = 11.200, R = 0.500, N = 2.900, D = 2.900, C = 4.100, 
+                  Q = 1.600, E = 1.800, G = 11.800, H = 2.000, I = 8.600, 
+                  L = 11.700, K = 0.500, M = 1.900, F = 5.100, P = 2.700, 
+                  S = 8.000, T = 4.900, W = 2.200, Y = 2.600, V = 12.900)
+
+# Function to calculate buried index for a given amino acid sequence
+calculate_buried_index <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    sequence <- toupper(sequence) # Convert to upper case to handle lower case inputs
+    buried_values <- buried_scale[strsplit(sequence, "")[[1]]]
+    buried_index <- sum(buried_values, na.rm = TRUE) / length(buried_values)
+    return(buried_index)
+  }
+}
+
+# Apply the function to calculate buried index for _n_terminal and _c_terminal
+dataframe$window_buried_n <- sapply(dataframe$window_sequence_n, calculate_buried_index)
+dataframe$window_buried_c <- sapply(dataframe$window_sequence_c, calculate_buried_index)
+
+
+# Transmembrane Tendency Scale
+# Zhao, G., London E., Protein Sci. 15:1987-2001(2006).
+transmembrane_tendency_scale <- c(A = 0.380, R = -2.570, N = -1.620, D = -3.270, C = -0.300, 
+                                  Q = -1.840, E = -2.900, G = -0.190, H = -1.440, I = 1.970, 
+                                  L = 1.820, K = -3.460, M = 1.400, F = 1.980, P = -1.440, 
+                                  S = -0.530, T = -0.320, W = 1.530, Y = 0.490, V = 1.460)
+
+# Function to calculate transmembrane tendency index for a given amino acid sequence
+calculate_transmembrane_tendency_index <- function(sequence) {
+  # Check if the sequence is empty
+  if (nchar(sequence) == 0) {
+    return(0)  # Return 0 for empty sequence
+  } else {
+    sequence <- toupper(sequence) # Convert to upper case to handle lower case inputs
+    transmembrane_tendency_values <- transmembrane_tendency_scale[strsplit(sequence, "")[[1]]]
+    transmembrane_tendency_index <- sum(transmembrane_tendency_values, na.rm = TRUE) / length(transmembrane_tendency_values)
+    return(transmembrane_tendency_index)
+  }
+}
+
+# Apply the function to calculate transmembrane tendency index for _n_terminal and _c_terminal
+dataframe$window_transmembrane_tendency_n <- sapply(dataframe$window_sequence_n, calculate_transmembrane_tendency_index)
+dataframe$window_transmembrane_tendency_c <- sapply(dataframe$window_sequence_c, calculate_transmembrane_tendency_index)
+
+## print the final counts
+columns_to_count <- c("transmembrane_type", "Topological_location", "orientation", "cytoplasmic_type", "extracellular_type")
+
+for(column_name in columns_to_count) {
+  cat("Counts based on", column_name, ":\n")
+  print(table(dataframe[[column_name]]))
+  cat("\n")
+}
+
+    # Return the dataframe
+  return(dataframe)
+}
+
+```
+
+
+
+
+## Extraction of non-predictable Cys sites - these are Cys sites that aren't suitable for the model
+## This will allow for these sites to be added back to the dataframe at the end after prediction / inference
+## This doesn't address the transmembrane with $orientation = unknown; that will have to be dealt with in the rev3 extraction function
+```{r}
+
+# Read in mouse membrane proteome
+library(readr)
+uniprot_mouse_total_membrane_proteome <- read_csv("uniprot_mouse_total_membrane_proteome_intramembrane_signal_sequence.csv")
+
+# Remove rows that have no information in subcellular location
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+  filter(!is.na(`Subcellular location [CC]`))
+
+## Assign cys_position for each cysteine
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+  rowwise() %>%
+  mutate(cys_positions = list(which(strsplit(Sequence, "")[[1]] == "C"))) %>%
+  unnest(cys_positions) %>%
+  rename(cys_position = cys_positions) %>%
+  ungroup()
+
+# Create new column 'transmembrane_type' based on conditions
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+  mutate(transmembrane_type = case_when(
+    grepl("Multi-pass", `Subcellular location [CC]`, ignore.case = TRUE) ~ "multi",
+    grepl("Single-pass membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type I/III",
+    grepl("Single-pass type I membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type I/III",
+    grepl("Single-pass type II membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type II/IV",
+    grepl("Single-pass type III membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type I/III",
+    grepl("Single-pass type IV membrane", `Subcellular location [CC]`, ignore.case = TRUE) ~ "type II/IV"
+  ))
+
+# Remove the subcellular location column now that information has been extracted into new column
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>% 
+  select(-`Subcellular location [CC]`)
+
+
+#### Annotate the topological locations
+## TRANSMEMBRANE Assignment
+
+# Initialize Topological_location, start, and end with NA
+uniprot_mouse_total_membrane_proteome$Topological_location <- NA
+uniprot_mouse_total_membrane_proteome$start <- NA
+uniprot_mouse_total_membrane_proteome$end <- NA
+
+# Process each row for the Transmembrane column
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+  rowwise() %>%
+  mutate(
+    Topological_location = {
+      # Skip if Transmembrane column is NA or empty
+      if (is.na(Transmembrane) || Transmembrane == "") {
+        NA_character_
+      } else {
+        # Extract all TRANSMEM ranges
+        pattern <- "TRANSMEM (\\d+)\\.{2}(\\d+)"
+        matches <- str_match_all(Transmembrane, pattern)[[1]]
+        location_assigned <- NA_character_
+
+        # Check each range to see if cys_position falls within
+        for (i in seq(nrow(matches))) {
+          range_start <- as.numeric(matches[i, 2])
+          range_end <- as.numeric(matches[i, 3])
+
+          if (cys_position >= range_start && cys_position <= range_end) {
+            # Assign Transmembrane and update start and end
+            location_assigned <- "Transmembrane"
+            start <- range_start
+            end <- range_end
+            break
+          }
+        }
+        location_assigned
+      }
+    }
+  ) %>%
+  ungroup()
+
+# Process each row to update start and end
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+  rowwise() %>%
+  mutate(
+    start = {
+      # Skip if Transmembrane column is NA or empty
+      if (is.na(Transmembrane) || Transmembrane == "") {
+        NA
+      } else {
+        # Extract all TRANSMEM ranges
+        pattern <- "TRANSMEM (\\d+)\\.{2}(\\d+)"
+        matches <- str_match_all(Transmembrane, pattern)[[1]]
+        assigned_start <- NA
+
+        # Check each range to see if cys_position falls within
+        for (i in seq(nrow(matches))) {
+          range_start <- as.numeric(matches[i, 2])
+          range_end <- as.numeric(matches[i, 3])
+
+          if (cys_position >= range_start && cys_position <= range_end) {
+            assigned_start <- range_start
+            break
+          }
+        }
+        assigned_start
+      }
+    },
+    end = {
+      # Skip if Transmembrane column is NA or empty
+      if (is.na(Transmembrane) || Transmembrane == "") {
+        NA
+      } else {
+        # Extract all TRANSMEM ranges
+        pattern <- "TRANSMEM (\\d+)\\.{2}(\\d+)"
+        matches <- str_match_all(Transmembrane, pattern)[[1]]
+        assigned_end <- NA
+
+        # Check each range to see if cys_position falls within
+        for (i in seq(nrow(matches))) {
+          range_start <- as.numeric(matches[i, 2])
+          range_end <- as.numeric(matches[i, 3])
+
+          if (cys_position >= range_start && cys_position <= range_end) {
+            assigned_end <- range_end
+            break
+          }
+        }
+        assigned_end
+      }
+    }
+  ) %>%
+  ungroup()
+
+
+## INTRAMEMBRANE assignment
+
+# Process each row for the Intramembrane column
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+    rowwise() %>%
+    mutate(
+        Topological_location = {
+            if (!is.na(Topological_location)) {
+                Topological_location
+            } else if (is.na(Intramembrane) || Intramembrane == "") {
+                NA_character_
+            } else {
+                pattern <- "INTRAMEM (?:[A-Za-z0-9-]+:)?(\\d+)\\.{2}(\\d+)"
+                matches <- str_match_all(Intramembrane, pattern)[[1]]
+                temp_start <- NA
+                temp_end <- NA
+                assigned_location <- NA_character_
+
+                for (i in seq_len(nrow(matches))) {
+                    range_start <- as.numeric(matches[i, 2])
+                    range_end <- as.numeric(matches[i, 3])
+                    if (cys_position >= range_start && cys_position <= range_end) {
+                        temp_start <- range_start
+                        temp_end <- range_end
+                        assigned_location <- "Intramembrane"
+                        break
+                    }
+                }
+                start <- temp_start
+                end <- temp_end
+                assigned_location
+            }
+        }
+    ) %>%
+    ungroup()
+
+## Assign start and end for the INTRAMEMBRANE domains
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+    rowwise() %>%
+    mutate(
+        start = {
+            if (is.na(Topological_location) || Topological_location != "Intramembrane") {
+                start
+            } else if (is.na(Intramembrane) || Intramembrane == "") {
+                NA
+            } else {
+                pattern <- "INTRAMEM (?:[A-Za-z0-9-]+:)?(\\d+)\\.{2}(\\d+)"
+                matches <- str_match_all(Intramembrane, pattern)[[1]]
+                temp_start <- NA
+
+                for (i in seq_len(nrow(matches))) {
+                    range_start <- as.numeric(matches[i, 2])
+                    range_end <- as.numeric(matches[i, 3])
+                    if (cys_position >= range_start && cys_position <= range_end) {
+                        temp_start <- range_start
+                        break
+                    }
+                }
+                temp_start
+            }
+        },
+        end = {
+            if (is.na(Topological_location) || Topological_location != "Intramembrane") {
+                end
+            } else if (is.na(Intramembrane) || Intramembrane == "") {
+                NA
+            } else {
+                pattern <- "INTRAMEM (?:[A-Za-z0-9-]+:)?(\\d+)\\.{2}(\\d+)"
+                matches <- str_match_all(Intramembrane, pattern)[[1]]
+                temp_end <- NA
+
+                for (i in seq_len(nrow(matches))) {
+                    range_start <- as.numeric(matches[i, 2])
+                    range_end <- as.numeric(matches[i, 3])
+                    if (cys_position >= range_start && cys_position <= range_end) {
+                        temp_end <- range_end
+                        break
+                    }
+                }
+                temp_end
+            }
+        }
+    ) %>%
+    ungroup()
+
+
+# Process info from the Signal peptide column
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+    rowwise() %>%
+    mutate(
+        Topological_location = ifelse(!is.na(Topological_location), Topological_location, {
+            if (is.na(`Signal peptide`) || `Signal peptide` == "") {
+                NA_character_
+            } else {
+                # Regex pattern to match SIGNAL ranges
+                pattern <- "SIGNAL (?:<)?(\\d+|\\?)(?:\\.\\.\\??)(\\d+|\\?);"
+                matches <- str_match_all(`Signal peptide`, pattern)[[1]]
+
+                # Initialize variable for assigned location
+                assigned_location <- NA_character_
+
+                # Loop through matches to check if cys_position falls within any range
+                for (i in seq_len(nrow(matches))) {
+                    range_start <- ifelse(matches[i, 2] == "?" || matches[i, 2] == "<1", NA, as.numeric(matches[i, 2]))
+                    range_end <- ifelse(matches[i, 3] == "?", NA, as.numeric(matches[i, 3]))
+
+                    if (!is.na(range_start) && !is.na(range_end) && cys_position >= range_start && cys_position <= range_end) {
+                        assigned_location <- "Signal_peptide"
+                        break
+                    }
+                }
+                assigned_location
+            }
+        })
+    ) %>%
+    ungroup()
+
+# Assign the start and end from Signal peptide column
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+    rowwise() %>%
+    mutate(
+        # Process for start
+        start = ifelse(Topological_location == "Signal_peptide" && is.na(start), {
+            if (is.na(`Signal peptide`) || `Signal peptide` == "") {
+                NA
+            } else {
+                pattern <- "SIGNAL (?:<)?(\\d+|\\?)(?:\\.\\.\\??)(\\d+|\\?);"
+                matches <- str_match_all(`Signal peptide`, pattern)[[1]]
+                temp_start <- NA
+
+                for (i in seq_len(nrow(matches))) {
+                    range_start <- ifelse(matches[i, 2] == "?" || matches[i, 2] == "<1", NA, as.numeric(matches[i, 2]))
+                    if (!is.na(range_start) && cys_position >= range_start) {
+                        temp_start <- range_start
+                        break
+                    }
+                }
+                temp_start
+            }
+        }, start),
+
+        # Process for end
+        end = ifelse(Topological_location == "Signal_peptide" && is.na(end), {
+            if (is.na(`Signal peptide`) || `Signal peptide` == "") {
+                NA
+            } else {
+                pattern <- "SIGNAL (?:<)?(\\d+|\\?)(?:\\.\\.\\??)(\\d+|\\?);"
+                matches <- str_match_all(`Signal peptide`, pattern)[[1]]
+                temp_end <- NA
+
+                for (i in seq_len(nrow(matches))) {
+                    range_end <- ifelse(matches[i, 3] == "?", NA, as.numeric(matches[i, 3]))
+                    if (!is.na(range_end) && cys_position <= range_end) {
+                        temp_end <- range_end
+                        break
+                    }
+                }
+                temp_end
+            }
+        }, end)
+    ) %>%
+    ungroup()
+
+
+## Assigning topological domain information to Topological_location (e.g. cytoplasmic, extracellular, so forth)
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+    rowwise() %>%
+    mutate(
+        Topological_location = ifelse(!is.na(Topological_location), Topological_location, {
+            if (is.na(`Topological domain`) || `Topological domain` == "") {
+                NA_character_
+            } else {
+                pattern <- "TOPO_DOM (\\d+|\\?)\\.\\.(\\d+|\\?); /note=\"([^\"]+)\""
+                matches <- str_match_all(`Topological domain`, pattern)[[1]]
+                assigned_location <- NA_character_
+
+                for (i in seq_len(nrow(matches))) {
+                    range_start <- ifelse(matches[i, 2] == "?", NA, as.numeric(matches[i, 2]))
+                    range_end <- ifelse(matches[i, 3] == "?", NA, as.numeric(matches[i, 3]))
+                    if (!is.na(range_start) && !is.na(range_end) && cys_position >= range_start && cys_position <= range_end) {
+                        assigned_location <- matches[i, 4]
+                        break
+                    }
+                }
+                assigned_location
+            }
+        })
+    ) %>%
+    ungroup()
+
+
+# Obtain range for Topological_locations other than Signal peptide, Transmembrane or Intramembrane
+# This is pulling the range information for the domains that came from column 'Topological domain'
+
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+    rowwise() %>%
+    mutate(
+        # Update start for Topological domain
+        start = ifelse(!Topological_location %in% c("Signal_peptide", "Transmembrane", "Intramembrane", NA_character_) && is.na(start), {
+            if (is.na(`Topological domain`) || `Topological domain` == "") {
+                NA
+            } else {
+                pattern <- "TOPO_DOM (\\d+|\\?)\\.\\.(\\d+|\\?); /note=\"([^\"]+)\""
+                matches <- str_match_all(`Topological domain`, pattern)[[1]]
+                temp_start <- NA
+
+                for (i in seq_len(nrow(matches))) {
+                    range_start <- ifelse(matches[i, 2] == "?" || matches[i, 2] == "<1", NA, as.numeric(matches[i, 2]))
+                    range_end <- ifelse(matches[i, 3] == "?", NA, as.numeric(matches[i, 3]))
+                    if (!is.na(range_start) && !is.na(range_end) && cys_position >= range_start && cys_position <= range_end && matches[i, 4] == Topological_location) {
+                        temp_start <- range_start
+                        break
+                    }
+                }
+                temp_start
+            }
+        }, start),
+
+        # Update end for Topological domain
+        end = ifelse(!Topological_location %in% c("Signal_peptide", "Transmembrane", "Intramembrane", NA_character_) && is.na(end), {
+            if (is.na(`Topological domain`) || `Topological domain` == "") {
+                NA
+            } else {
+                pattern <- "TOPO_DOM (\\d+|\\?)\\.\\.(\\d+|\\?); /note=\"([^\"]+)\""
+                matches <- str_match_all(`Topological domain`, pattern)[[1]]
+                temp_end <- NA
+
+                for (i in seq_len(nrow(matches))) {
+                    range_start <- ifelse(matches[i, 2] == "?" || matches[i, 2] == "<1", NA, as.numeric(matches[i, 2]))
+                    range_end <- ifelse(matches[i, 3] == "?", NA, as.numeric(matches[i, 3]))
+                    if (!is.na(range_start) && !is.na(range_end) && cys_position >= range_start && cys_position <= range_end && matches[i, 4] == Topological_location) {
+                        temp_end <- range_end
+                        break
+                    }
+                }
+                temp_end
+            }
+        }, end)
+    ) %>%
+    ungroup()
+
+
+# Print out the counts for each Topological_location before they are reassigned
+table(uniprot_mouse_total_membrane_proteome$Topological_location)
+
+
+##### Rename the rare Topological locations
+## Rename the unusual "lumenal-like" Topological locations to "Extracellular" and a few oddballs to Cytoplasmic when indicated
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+  mutate(Topological_location = recode(Topological_location, 
+                                        "Lumenal" = "Extracellular",
+                                        
+                                        "Intravacuolar" = "Extracellular",  
+                                        "Lumenal, vesicle" = "Extracellular", 
+                                        "Lumenal, thylakoid" = "Extracellular", 
+                                        "Lumenal, melanosome" = "Extracellular", 
+                                        "Vesicular" = "Extracellular", 
+                                        "Virion Surface" = "Extracellular", 
+                                        "Vacuolar" = "Extracellular",
+                                        "Periplasmic" = "Extracellular", 
+                                        "Stromal" = "Extracellular", 
+                                        "Intragranular" = "Extracellular",
+                                        "Exoplasmic loop" = "Extracellular", 
+                                        "Intravirion" = "Cytoplasmic", 
+                                        "Mother cell cytoplasmic" = "Cytoplasmic"))
+
+# The following Uniprot Topological domain designations are NOT changed:
+# "Chloroplast intermembrane"
+# "Mitochondrial intermembrane"
+# "Mitochondrial matrix"
+# "Peroxisomal"
+# "Peroxisomal matrix"
+# "Nuclear"
+# "Perinuclear space"
+# "Forespore intermembrane space"
+
+# Make a dataframe of rows that are not suitable for the model
+# This will be used later and added back to the predicted dataframe so that it can be "completed"
+uniprot_mouse_total_membrane_proteome_rare_topological_locations <- uniprot_mouse_total_membrane_proteome %>%
+  filter(!Topological_location %in% c("Cytoplasmic", "Transmembrane", "Extracellular") & !is.na(Topological_location))
+
+
+
+```
+
+
+
+
+
+
+
+
+
+## Apply feature extraction function to training data
+```{r}
+
+training_mammal <- topopalmtree_feature_extract_rev3(training_mammal)
+
+```
+
+
+
+## Specific to training data
+## match positive palmitoylation site data (column $pos) from swisspalm to the cys_position column (all cysteines)
+```{r}
+
+# combining the positive and negative training data into one column
+training_mammal <- training_mammal %>%
+  mutate(palmitoylation = ifelse(pos == cys_position, "yes", "no"))
+
+# remove the pos column
+training_mammal <- training_mammal %>%
+  select(-pos)
+
+# remove contradictory negative training data that was also assigned as positive
+training_mammal <- training_mammal %>%
+  group_by(Entry, cys_position) %>%
+  filter(!(palmitoylation == "no" & any(palmitoylation == "yes"))) %>%
+  ungroup()
+
+# keep only unique rows
+training_mammal <- distinct(training_mammal)
+
+# remove extranneous Cys sites from claudin-3 that came from rodenberg dataset
+# these are cysteines that are in the native sequence but aren't present in their single Cys mutants
+training_mammal <- training_mammal %>%
+  filter(
+    Entry != "O15551" | 
+    !is.na(organism) | 
+    (Entry == "O15551" & is.na(organism) & palmitoylation == "yes")
+  )
+
+```
+
+
+#### Extract Lipidation column to see if there are positive training data from uniprot that we could have missed
+## This added 17 more positive (ie S-palmitoyl sites) to the training data
+```{r}
+
+# Separate rows with NA in 'Lipidation'
+training_mammal_na <- training_mammal %>%
+  filter(is.na(Lipidation))
+
+# Process rows without NA in 'Lipidation'
+training_mammal_no_na <- training_mammal %>%
+  filter(!is.na(Lipidation)) %>%
+  mutate(uniprot_cys_palmitoyl = str_extract_all(Lipidation, "(?<=LIPID )[0-9]+")) %>%
+  unnest(uniprot_cys_palmitoyl) %>%
+  mutate(uniprot_cys_palmitoyl = as.numeric(uniprot_cys_palmitoyl)) %>%
+  mutate(palmitoylation = if_else(uniprot_cys_palmitoyl == cys_position, "yes", palmitoylation))
+
+# Combine the two dataframes
+training_mammal <- bind_rows(training_mammal_no_na, training_mammal_na)
+
+# Calculate the counts
+palmitoylation_counts <- training_mammal %>%
+  group_by(Entry) %>%
+  filter(uniprot_cys_palmitoyl == cys_position) %>%
+  summarise(count = n(), .groups = 'drop')
+
+# Remove contradictory assignments
+training_mammal <- training_mammal %>%
+  group_by(Entry, cys_position) %>%
+  filter(!(palmitoylation == "no" & any(palmitoylation == "yes"))) %>%
+  ungroup()
+
+# remove the uniprot_cys_palmitoyl column
+training_mammal <- training_mammal %>% select(-uniprot_cys_palmitoyl)
+
+# Keep only unique rows
+training_mammal <- distinct(training_mammal, .keep_all = TRUE)
+
+## Print the counts now that uniprot palmitoyl sites have been incorporated
+counts <- table(training_mammal$palmitoylation)
+counts
+### Note: This added 17 more S-palmitoyl sites (383 -> 400)
+
+# Add a numeric column for palmitoylation yes or no to make it easier for the training and prediction
+# 1 = yes, 0 = no
+training_mammal$palm_number <- ifelse(training_mammal$palmitoylation == "yes", 1, 0)
+
+
+### OBTAIN COUNTS ON THE TRAINING DATA
+
+# Count the number of rows with each cytoplasmic_type
+cytoplasmic_type_counts <- table(training_mammal$cytoplasmic_type[training_mammal$Topological_location == "Cytoplasmic"])
+
+# Print the counts
+print(cytoplasmic_type_counts)
+
+## Determine how many of the inward vs outward transmembranes have palmitoylation sites
+
+inward_yes_count <- training_mammal %>%
+  filter(Topological_location == "Transmembrane" & orientation == "inward" & palmitoylation == "yes") %>%
+  tally()
+
+inward_no_count <- training_mammal %>%
+  filter(Topological_location == "Transmembrane" & orientation == "inward" & palmitoylation == "no") %>%
+  tally()
+
+outward_yes_count <- training_mammal %>%
+  filter(Topological_location == "Transmembrane" & orientation == "outward" & palmitoylation == "yes") %>%
+  tally()
+
+outward_no_count <- training_mammal %>%
+  filter(Topological_location == "Transmembrane" & orientation == "outward" & palmitoylation == "no") %>%
+  tally()
+
+# Print the counts
+cat("Inward Orientation with Palmitoylation: Yes =", inward_yes_count$n, ", No =", inward_no_count$n, "\n")
+cat("Outward Orientation with Palmitoylation: Yes =", outward_yes_count$n, ", No =", outward_no_count$n, "\n")
+
+# Print the total number of positive and negative training data
+counts <- table(training_mammal$palm_number)
+counts
+
+# remove unnecessary data frames
+rm(outward_no_count)
+rm(outward_yes_count)
+rm(inward_no_count)
+rm(inward_yes_count)
+rm(palmitoylation_counts)
+rm(training_mammal_na)
+rm(training_mammal_no_na)
+
+```
+
+## Assign factor levels in training_mammal
+```{r}
+
+# Convert categorical variables to factors with explicit levels
+training_mammal$transmembrane_type <- factor(training_mammal$transmembrane_type, levels = unique(training_mammal$transmembrane_type))
+training_mammal$Topological_location <- factor(training_mammal$Topological_location, levels = unique(training_mammal$Topological_location))
+training_mammal$orientation <- factor(training_mammal$orientation, levels = unique(training_mammal$orientation))
+training_mammal$cytoplasmic_type <- factor(training_mammal$cytoplasmic_type, levels = unique(training_mammal$cytoplasmic_type))
+training_mammal$extracellular_type <- factor(training_mammal$extracellular_type, levels = unique(training_mammal$extracellular_type))
+
+```
+
+
+
+## useful metrics from training_mammal
+# statistics for palmitoylation with respect to transmembrane orientation
+```{r}
+
+# Subset for orientation = inward
+inward_subset <- training_mammal[training_mammal$orientation == "inward", ]
+
+# Calculate for palmitoylation = no
+median_inward_no <- median(inward_subset$relative_cys_position_topology[inward_subset$palmitoylation == "no"], na.rm = TRUE)
+iqr_inward_no <- IQR(inward_subset$relative_cys_position_topology[inward_subset$palmitoylation == "no"], na.rm = TRUE)
+
+# Calculate for palmitoylation = yes
+median_inward_yes <- median(inward_subset$relative_cys_position_topology[inward_subset$palmitoylation == "yes"], na.rm = TRUE)
+iqr_inward_yes <- IQR(inward_subset$relative_cys_position_topology[inward_subset$palmitoylation == "yes"], na.rm = TRUE)
+
+# Print results
+cat("Inward Orientation - Palmitoylation No: Median =", median_inward_no, ", IQR =", iqr_inward_no, "\n")
+cat("Inward Orientation - Palmitoylation Yes: Median =", median_inward_yes, ", IQR =", iqr_inward_yes, "\n")
+
+# Subset for orientation = outward
+outward_subset <- training_mammal[training_mammal$orientation == "outward", ]
+
+# Calculate for palmitoylation = no
+median_outward_no <- median(outward_subset$relative_cys_position_topology[outward_subset$palmitoylation == "no"], na.rm = TRUE)
+iqr_outward_no <- IQR(outward_subset$relative_cys_position_topology[outward_subset$palmitoylation == "no"], na.rm = TRUE)
+
+# Calculate for palmitoylation = yes
+median_outward_yes <- median(outward_subset$relative_cys_position_topology[outward_subset$palmitoylation == "yes"], na.rm = TRUE)
+iqr_outward_yes <- IQR(outward_subset$relative_cys_position_topology[outward_subset$palmitoylation == "yes"], na.rm = TRUE)
+
+# Print results
+cat("Outward Orientation - Palmitoylation No: Median =", median_outward_no, ", IQR =", iqr_outward_no, "\n")
+cat("Outward Orientation - Palmitoylation Yes: Median =", median_outward_yes, ", IQR =", iqr_outward_yes, "\n")
+
+```
+
+
+
+# apply extraction function to holdout_mouse
+```{r}
+
+holdout_mouse <- topopalmtree_feature_extract_rev3((holdout_mouse))
+
+```
+
+
+# apply extraction function to holdout_mammal
+```{r}
+
+holdout_mammal <- topopalmtree_feature_extract_rev3((holdout_mammal))
+
+```
+
+
+## Apply viral feature extraction to the viet dataset
+
+```{r}
+
+viet_uniprot_swisspalm <- topopalmtree_feature_extract_virus_rev_3(viet_uniprot_swisspalm)
+
+```
+
+
+
+## Define a function to extract Lipidation column in uniprot, match to cys position and assign as palmitoylated
+## This function will add columns "palmitoylation" and "palm_number"
+## Lipidation assign
+```{r}
+
+lipidation_assign <- function(df) {
+  # Split up the assigned palmitoyl positions into separate rows
+  df <- df %>%
+    mutate(palm_position = str_extract_all(Lipidation, "(?<=LIPID )[0-9]+")) %>%
+    unnest(palm_position)
+
+  # Create a new column 'palmitoylation' with default value no
+  df$palmitoylation <- "no"
+
+  # Update 'palmitoylation' column based on the condition
+  df$palmitoylation[df$palm_position == df$cys_position] <- "yes"
+
+  # Remove contradictory negative assignments
+  df <- df %>%
+    group_by(Entry, cys_position) %>%
+    filter(!(palmitoylation == "no" & any(palmitoylation == "yes"))) %>%
+    ungroup()
+  
+  # Remove the 'palm_position' column as it's no longer needed
+  df <- select(df, -palm_position)
+
+  # Keep only unique rows
+  df <- distinct(df)
+  
+  # Stats about the dataset
+  print(length(unique(df$Entry)))
+  yes_count <- sum(df$palmitoylation == "yes")
+  no_count <- sum(df$palmitoylation == "no")
+  cat("Number of rows with palmitoylation = yes:", yes_count, "\n")
+  cat("Number of rows with palmitoylation = no:", no_count, "\n")
+
+  transmembrane_type_counts <- table(df$transmembrane_type)
+  print(transmembrane_type_counts)
+
+  transmembrane_rows <- subset(df, Topological_location == "Transmembrane")
+  inward_count <- sum(transmembrane_rows$orientation == "inward")
+  outward_count <- sum(transmembrane_rows$orientation == "outward")
+  cat("Number of transmembrane rows with orientation = inward:", inward_count, "\n")
+  cat("Number of transmembrane rows with orientation = outward:", outward_count, "\n")
+
+  # Add new column 'palm_number' based on 'palmitoylation' status
+  df$palm_number <- ifelse(df$palmitoylation == "yes", 1, 0)
+
+  # Return the modified dataframe
+  return(df)
+}
+
+```
+
+## Apply lipidation assign function to holdout MOUSE dataset
+```{r}
+
+holdout_mouse <- lipidation_assign(holdout_mouse)
+
+```
+
+
+
+# Apply lipidation assign function to holdout MAMMAL dataset
+```{r}
+
+holdout_mammal <- lipidation_assign(holdout_mammal)
+
+# Group by Organism and count palmitoylation statuses, and calculate percentage of palmitoylation
+palmitoylation_counts <- holdout_mammal %>%
+                          group_by(Organism) %>%
+                          summarise(Count_Palmitoylated = sum(palmitoylation == "yes", na.rm = TRUE),
+                                    Count_Not_Palmitoylated = sum(palmitoylation == "no", na.rm = TRUE),
+                                    Total = n(),
+                                    Percent_Palmitoylated = (sum(palmitoylation == "yes", na.rm = TRUE) / n()) * 100)
+
+# View the counts with percentages
+print(palmitoylation_counts)
+
+```
+
+
+
+
+## Apply lipidation assign to the viral dataset
+```{r}
+
+viet_uniprot_swisspalm <- lipidation_assign(viet_uniprot_swisspalm)
+
+```
+
+
+#### The palmitoyl sites above were all derived from uniprot but there may be missing S-palmitoyl sites
+### will look for any site matches in the swisspalm dataset and ensure that palmitoylation = yes in those cases
+### This brought the number of positive sites from 80 -> 82
+```{r}
+
+## bring any positive data from swisspalm into the dataframe (so positive sites aren't missed)
+library(readr)
+swisspalm_all <- read_csv("swisspalm_sites_all.csv", 
+    skip = 4)
+
+for(i in seq_len(nrow(viet_uniprot_swisspalm))){
+  for(j in seq_len(nrow(swisspalm_all))){
+    if(viet_uniprot_swisspalm$Entry[i] == swisspalm_all$uniprot_ac[j] && 
+       viet_uniprot_swisspalm$cys_position[i] == swisspalm_all$pos[j]) {
+         viet_uniprot_swisspalm$palmitoylation[i] <- "yes"
+         viet_uniprot_swisspalm$palm_number[i] <- 1
+       }
+  }
+}
+
+# Count and print the number of rows with "yes" and "no" in the 'palmitoylation' column
+yes_count <- sum(viet_uniprot_swisspalm$palmitoylation == "yes")
+no_count <- sum(viet_uniprot_swisspalm$palmitoylation == "no")
+cat("Number of rows with palmitoylation = yes:", yes_count, "\n")
+cat("Number of rows with palmitoylation = no:", no_count, "\n")
+
+
+```
+
+
+
+## Build KdelR2 dataframe that first removes all the Cys residues then performs scanning mutagenesis
+
+```{r}
+
+library(readr)
+uniprot_kdelr2_Mm <- read_csv("uniprot_kdelr2_Mm.csv")
+
+# Extract the original sequence
+original_sequence <- uniprot_kdelr2_Mm$Sequence[1]
+
+# Convert each Cys residue to Ser
+# Replace every "C" with "S"
+original_sequence <- gsub("C", "S", original_sequence)
+
+# Initialize a dataframe to store the new rows
+new_rows <- uniprot_kdelr2_Mm[1, ]
+new_rows$Sequence <- original_sequence  # First row with original sequence
+
+# Create new rows by replacing each amino acid with "C"
+for (i in 1:nchar(original_sequence)) {
+  new_sequence <- original_sequence
+  new_sequence <- substr(new_sequence, 1, i-1) <- paste0(substr(new_sequence, 1, i-1), "C", substr(new_sequence, i+1, nchar(original_sequence)))
+  new_row <- uniprot_kdelr2_Mm[1, ]
+  new_row$Sequence <- new_sequence
+  new_rows <- rbind(new_rows, new_row)
+}
+
+# Replace the original uniprot_kdelr2_Mm with the new dataframe
+uniprot_kdelr2_Mm <- new_rows
+
+## Apply feature extraction
+uniprot_kdelr2_Mm <- topopalmtree_feature_extract_rev3(uniprot_kdelr2_Mm)
+
+# Ensure that categorical variables in uniprot_kdelr2_Mm are factors with the same levels as in training_mammal
+uniprot_kdelr2_Mm$transmembrane_type <- factor(uniprot_kdelr2_Mm$transmembrane_type, levels = levels(training_mammal$transmembrane_type))
+uniprot_kdelr2_Mm$Topological_location <- factor(uniprot_kdelr2_Mm$Topological_location, levels = levels(training_mammal$Topological_location))
+uniprot_kdelr2_Mm$orientation <- factor(uniprot_kdelr2_Mm$orientation, levels = levels(training_mammal$orientation))
+uniprot_kdelr2_Mm$cytoplasmic_type <- factor(uniprot_kdelr2_Mm$cytoplasmic_type, levels = levels(training_mammal$cytoplasmic_type))
+uniprot_kdelr2_Mm$extracellular_type <- factor(uniprot_kdelr2_Mm$extracellular_type, levels = levels(training_mammal$extracellular_type))
+
+```
+
+
+
+
+## building bacteriorhodopsin sequence to test the model
+```{r}
+
+## Note the sequence P02945 from uniprot has 5 more amino acids posiions 171 - 175 (sequence SKAES) compared to the sequence for structure 1C3W used in Luecke et al 1999 J. Mol. Biol.
+
+# read in the bacteriorhodopsin sequences
+bacteriorhodopsins <- read.csv("bacteriorhodopsins.csv")
+
+# Filter for Entry P02945
+bop_scanning_mutants <- filter(bacteriorhodopsins, Entry == "P02945")
+rm(bacteriorhodopsins)
+
+# Get the sequence
+sequence <- bop_scanning_mutants$Sequence
+
+# Initialize an empty data frame to store the new rows
+new_rows <- data.frame()
+
+# Iterate over the sequence to create new rows
+for (i in 1:nchar(sequence)) {
+  new_sequence <- substring(sequence, 1, i - 1) %>% 
+                  paste0("C", substring(sequence, i + 1))
+  
+  original_amino_acid <- substring(sequence, i, i)
+  
+  new_row <- bop_scanning_mutants
+  new_row$Sequence <- new_sequence
+  new_row$original_amino_acid <- original_amino_acid
+  
+  new_rows <- rbind(new_rows, new_row)
+}
+
+# Remove the original sequence row
+new_rows <- new_rows %>% filter(original_amino_acid != "C")
+
+# Final dataframe
+bop_scanning_mutants <- new_rows
+
+# Cleanup: remove temporary variables
+rm(sequence, new_rows)
+
+# Rename columns in bop_scanning_mutants to match bop_scanning_mutants
+bop_scanning_mutants <- bop_scanning_mutants %>%
+  rename(
+    `Entry Name` = `Entry.Name`,
+    `Protein names` = `Protein.names`,
+    `Gene Names` = `Gene.Names`,
+    `Subcellular location [CC]` = `Subcellular.location..CC.`,
+    `Topological domain` = `Topological.domain`
+)
+
+## apply feature extraction to bacteriorhodopsin
+bop_scanning_mutants <- topopalmtree_feature_extract_rev3(bop_scanning_mutants)
+
+
+# Assign the missing levels since bacteriorhodopsin doesn't have all the categorical levels present in training
+# Adjusting levels for transmembrane_type in bop_scanning_mutants
+bop_scanning_mutants$transmembrane_type <- factor(
+    bop_scanning_mutants$transmembrane_type, 
+    levels = c("multi", "type I/III", "type II/IV")
+)
+
+# Adjusting levels for Topological_location in bop_scanning_mutants
+bop_scanning_mutants$Topological_location <- factor(
+    bop_scanning_mutants$Topological_location, 
+    levels = c("Cytoplasmic", "Extracellular", "Transmembrane")
+)
+
+# Adjusting levels for orientation in bop_scanning_mutants
+bop_scanning_mutants$orientation <- factor(
+    bop_scanning_mutants$orientation, 
+    levels = c("inward", "orientation_not_applicable", "outward")
+)
+
+# Adjusting levels for cytoplasmic_type in bop_scanning_mutants
+bop_scanning_mutants$cytoplasmic_type <- factor(
+    bop_scanning_mutants$cytoplasmic_type, 
+    levels = c("cytoplasmic_type_not_applicable", "head", "loop", "tail")
+)
+
+# Adjusting levels for extracellular_type in bop_scanning_mutants
+bop_scanning_mutants$extracellular_type <- factor(
+    bop_scanning_mutants$extracellular_type, 
+    levels = c("extracellular_type_not_applicable", "head", "loop", "tail")
+)
+
+
+```
+
+
+
+
+###### MODELING ###### 
+
+## Boosted Tree (GBM) with tuning of hyperparameters
+## Training mammal is NOT min-max normalized or one-hot-encoded
+## Using rev3 feature extraction - REV3 FEATURES
+```{r}
+
+library(caret)
+library(gbm)
+
+# Specifying the predictor variables for the Boosted Tree model
+predictors <- c("orientation", "Topological_location",
+                "cytoplasmic_type", 
+                 "cys_position_from_topo_start", "cys_position_from_topo_end",
+                "relative_cys_position_topology",
+                "window_cys_score_n", "window_cys_score_c",
+                "window_n_hydrophobicity", "window_c_hydrophobicity",
+                "window_transmembrane_tendency_n", "window_transmembrane_tendency_c",
+                "window_net_charge_n", "window_net_charge_c",
+                "window_polar_n", "window_polar_c",
+                "window_aliphatic_n", "window_aliphatic_c",
+                "window_aromatic_n", "window_aromatic_c",
+                "relative_cys_position_protein", "transmembrane_type",
+                "window_asparagine_n", "window_asparagine_c",
+                "window_asp_glu_n", "window_asp_glu_c",
+                "Topological_length",
+                "window_abs_charge_n", "window_abs_charge_c",
+                "extracellular_type"
+                
+# Below this position is the "testing" variable
+                
+                 )
+
+## Features ON HOLD
+
+# Features that made performance WORSE:                 
+# "window_flexibility_n", "window_flexibility_c"
+# "window_bulkiness_n", "window_bulkiness_c"
+# "window_n_hydrophilicity", "window_c_hydrophilicity"
+# "window_buried_n", "window_buried_c"
+# "window_tryptophan_n", "window_tryptophan_c",
+
+# Features that might be helpful but marginal at best:
+# "window_tyrosine_n", "window_tyrosine_c",
+# "window_phenylalanine_n", "window_phenylalanine_c"
+# "window_histidine_n", "window_histidine_c"
+# "cys_position", "cys_distance_from_c_terminus"
+
+
+# Create a vector with all the relevant column names including the target variable
+all_columns <- c(predictors, "palm_number")
+
+# Create a subset of the data with only the relevant columns
+training_subset <- training_mammal[, all_columns]
+
+# Convert palm_number to a factor with valid level names
+training_subset$palm_number <- factor(training_subset$palm_number, 
+                                      levels = c(1, 0),  # Class1 is set as the first level
+                                      labels = c("Class1", "Class0"))
+
+# Setting up 10-fold cross-validation
+set.seed(123)
+control <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = TRUE,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+# Specifying the tuning grid
+tuning_grid <- expand.grid(
+  interaction.depth = c(5),  # Example values for tree depth
+  n.trees = c(4000),      # Increasing the number of trees
+  shrinkage = c(0.02),         # Learning rate (0.03 was also good!)
+  n.minobsinnode = c(5)        # Minimum number of observations in the nodes
+)
+
+# Train the GBM model
+gbm_model <- train(
+  palm_number ~ ., 
+  data = training_subset,
+  method = "gbm",
+  trControl = control,
+  tuneGrid = tuning_grid,
+  metric = "ROC",
+  verbose = FALSE
+)
+
+# Print the model results
+print(gbm_model)
+
+# xgb_predictions contains the saved predictions from the best model
+best_preds <- predict(gbm_model, newdata = training_subset)
+
+# Generate confusion matrix
+confusionMatrix(data = best_preds, reference = training_subset$palm_number)
+
+```
+
+
+## same as above but changing tuning parameters
+```{r}
+
+
+library(caret)
+library(gbm)
+
+# Specifying the predictor variables for the Boosted Tree model
+predictors <- c("orientation", "Topological_location",
+                "cytoplasmic_type", 
+                 "cys_position_from_topo_start", "cys_position_from_topo_end",
+                "relative_cys_position_topology",
+                "window_cys_score_n", "window_cys_score_c",
+                "window_n_hydrophobicity", "window_c_hydrophobicity",
+                "window_transmembrane_tendency_n", "window_transmembrane_tendency_c",
+                "window_net_charge_n", "window_net_charge_c",
+                "window_polar_n", "window_polar_c",
+                "window_aliphatic_n", "window_aliphatic_c",
+                "window_aromatic_n", "window_aromatic_c",
+                "window_asparagine_n", "window_asparagine_c",
+                "Topological_length", "transmembrane_type",
+                "window_abs_charge_n", "window_abs_charge_c",
+                
+# Below this position is the "testing" variable
+                "window_asp_glu_n", "window_asp_glu_c"
+                 )
+
+## Features ON HOLD - SHOULD REPLACE
+# "extracellular_type"
+
+# Features that made performance WORSE:                 
+# "window_flexibility_n", "window_flexibility_c"
+# "window_bulkiness_n", "window_bulkiness_c"
+# "window_n_hydrophilicity", "window_c_hydrophilicity"
+# "window_buried_n", "window_buried_c"
+# "window_tryptophan_n", "window_tryptophan_c",
+
+# Features that might be helpful but marginal at best:
+# "window_tyrosine_n", "window_tyrosine_c",
+# "window_phenylalanine_n", "window_phenylalanine_c"
+# "window_histidine_n", "window_histidine_c"
+# "relative_cys_position_protein"
+# "cys_position", "cys_distance_from_c_terminus"
+
+
+# Create a vector with all the relevant column names including the target variable
+all_columns <- c(predictors, "palm_number")
+
+# Create a subset of the data with only the relevant columns
+training_subset <- training_mammal[, all_columns]
+
+# Convert palm_number to a factor with valid level names
+training_subset$palm_number <- factor(training_subset$palm_number, 
+                                      levels = c(1, 0),  # Class1 is set as the first level
+                                      labels = c("Class1", "Class0"))
+
+# Setting up 10-fold cross-validation
+set.seed(123)
+control <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = TRUE,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+# Specifying the tuning grid
+tuning_grid <- expand.grid(
+  interaction.depth = c(10),  # Example values for tree depth (6)
+  n.trees = c(3000),      # Increasing the number of trees (4000)
+  shrinkage = c(0.01),         # Learning rate (0.03 was also good!) (0.01)
+  n.minobsinnode = c(5)        # Minimum number of observations in the nodes (5)
+)
+
+# Train the GBM model
+gbm_model <- train(
+  palm_number ~ ., 
+  data = training_subset,
+  method = "gbm",
+  trControl = control,
+  tuneGrid = tuning_grid,
+  metric = "ROC",
+  verbose = FALSE
+)
+
+# Print the model results
+print(gbm_model)
+
+# xgb_predictions contains the saved predictions from the best model
+best_preds <- predict(gbm_model, newdata = training_subset)
+
+# Generate confusion matrix
+confusionMatrix(data = best_preds, reference = training_subset$palm_number)
+
+
+```
+
+
+# As above but now am plotting different interaction depths
+```{r}
+
+
+library(caret)
+library(gbm)
+
+# Specifying the predictor variables for the Boosted Tree model
+predictors <- c("orientation", "Topological_location",
+                "cytoplasmic_type", 
+                 "cys_position_from_topo_start", "cys_position_from_topo_end",
+                "relative_cys_position_topology",
+                "window_cys_score_n", "window_cys_score_c",
+                "window_n_hydrophobicity", "window_c_hydrophobicity",
+                "window_transmembrane_tendency_n", "window_transmembrane_tendency_c",
+                "window_net_charge_n", "window_net_charge_c",
+                "window_polar_n", "window_polar_c",
+                "window_aliphatic_n", "window_aliphatic_c",
+                "window_aromatic_n", "window_aromatic_c",
+                "window_asparagine_n", "window_asparagine_c",
+                "Topological_length", "transmembrane_type",
+                "window_abs_charge_n", "window_abs_charge_c",
+                
+# Below this position is the "testing" variable
+                "window_asp_glu_n", "window_asp_glu_c"
+                 )
+
+## Features ON HOLD
+# "extracellular_type"
+
+# Features that made performance WORSE:                 
+# "window_flexibility_n", "window_flexibility_c"
+# "window_bulkiness_n", "window_bulkiness_c"
+# "window_n_hydrophilicity", "window_c_hydrophilicity"
+# "window_buried_n", "window_buried_c"
+# "window_tryptophan_n", "window_tryptophan_c",
+
+# Features that might be helpful but marginal at best:
+# "window_tyrosine_n", "window_tyrosine_c",
+# "window_phenylalanine_n", "window_phenylalanine_c"
+# "window_histidine_n", "window_histidine_c"
+# "relative_cys_position_protein"
+# "cys_position", "cys_distance_from_c_terminus"
+
+
+
+# Create a vector with all the relevant column names including the target variable
+all_columns <- c(predictors, "palm_number")
+
+# Create a subset of the data with only the relevant columns
+training_subset <- training_mammal[, all_columns]
+
+# Convert palm_number to a factor with valid level names
+training_subset$palm_number <- factor(training_subset$palm_number, 
+                                      levels = c(1, 0),  # Class1 is set as the first level
+                                      labels = c("Class1", "Class0"))
+
+# Setting up 10-fold cross-validation
+set.seed(123)
+control <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = TRUE,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+# Specifying the tuning grid
+tuning_grid <- expand.grid(
+  interaction.depth = c(2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22),  # Grid search
+  n.trees = c(500),      # Trees at 500 to speed it up
+  shrinkage = c(0.01),         # Learning rate (0.03 was also good!) (0.01)
+  n.minobsinnode = c(5)        # Minimum number of observations in the nodes (5)
+)
+
+# Train the GBM model
+gbm_model <- train(
+  palm_number ~ ., 
+  data = training_subset,
+  method = "gbm",
+  trControl = control,
+  tuneGrid = tuning_grid,
+  metric = "ROC",
+  verbose = FALSE
+)
+
+# Visualize the performance of different interaction depths
+plot(gbm_model)
+
+# Print the model results
+print(gbm_model)
+
+# xgb_predictions contains the saved predictions from the best model
+best_preds <- predict(gbm_model, newdata = training_subset)
+
+# Generate confusion matrix
+confusionMatrix(data = best_preds, reference = training_subset$palm_number)
+
+
+```
+
+
+
+## Now tuning to number of trees
+```{r}
+
+
+library(caret)
+library(gbm)
+
+# Specifying the predictor variables for the Boosted Tree model
+predictors <- c("orientation", "Topological_location",
+                "cytoplasmic_type", 
+                 "cys_position_from_topo_start", "cys_position_from_topo_end",
+                "relative_cys_position_topology",
+                "window_cys_score_n", "window_cys_score_c",
+                "window_n_hydrophobicity", "window_c_hydrophobicity",
+                "window_transmembrane_tendency_n", "window_transmembrane_tendency_c",
+                "window_net_charge_n", "window_net_charge_c",
+                "window_polar_n", "window_polar_c",
+                "window_aliphatic_n", "window_aliphatic_c",
+                "window_aromatic_n", "window_aromatic_c",
+                "window_asparagine_n", "window_asparagine_c",
+                "Topological_length", "transmembrane_type",
+                "window_abs_charge_n", "window_abs_charge_c",
+                
+# Below this position is the "testing" variable
+                "window_asp_glu_n", "window_asp_glu_c"
+                 )
+
+## Features ON HOLD
+# "extracellular_type"
+
+# Features that made performance WORSE:                 
+# "window_flexibility_n", "window_flexibility_c"
+# "window_bulkiness_n", "window_bulkiness_c"
+# "window_n_hydrophilicity", "window_c_hydrophilicity"
+# "window_buried_n", "window_buried_c"
+# "window_tryptophan_n", "window_tryptophan_c",
+
+# Features that might be helpful but marginal at best:
+# "window_tyrosine_n", "window_tyrosine_c",
+# "window_phenylalanine_n", "window_phenylalanine_c"
+# "window_histidine_n", "window_histidine_c"
+# "relative_cys_position_protein"
+# "cys_position", "cys_distance_from_c_terminus"
+
+
+# Create a vector with all the relevant column names including the target variable
+all_columns <- c(predictors, "palm_number")
+
+# Create a subset of the data with only the relevant columns
+training_subset <- training_mammal[, all_columns]
+
+# Convert palm_number to a factor with valid level names
+training_subset$palm_number <- factor(training_subset$palm_number, 
+                                      levels = c(1, 0),  # Class1 is set as the first level
+                                      labels = c("Class1", "Class0"))
+
+# Setting up 10-fold cross-validation
+set.seed(123)
+control <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = TRUE,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+# Specifying the tuning grid
+tuning_grid <- expand.grid(
+  interaction.depth = c(18),  # Held constant
+  n.trees = c(100, 200, 500, 1000, 2000, 3000, 4000, 5000, 6000), # tree grid
+  shrinkage = c(0.01),         # Learning rate (0.03 was also good!) (0.01)
+  n.minobsinnode = c(5)        # Minimum number of observations in the nodes (5)
+)
+
+# Train the GBM model
+gbm_model <- train(
+  palm_number ~ ., 
+  data = training_subset,
+  method = "gbm",
+  trControl = control,
+  tuneGrid = tuning_grid,
+  metric = "ROC",
+  verbose = FALSE
+)
+
+# Visualize the performance of different interaction depths
+plot(gbm_model)
+
+# Print the model results
+print(gbm_model)
+
+# xgb_predictions contains the saved predictions from the best model
+best_preds <- predict(gbm_model, newdata = training_subset)
+
+# Generate confusion matrix
+confusionMatrix(data = best_preds, reference = training_subset$palm_number)
+
+
+
+```
+
+## Tuning the shrinkage rate
+```{r}
+
+
+library(caret)
+library(gbm)
+
+# Specifying the predictor variables for the Boosted Tree model
+predictors <- c("orientation", "Topological_location",
+                "cytoplasmic_type", 
+                 "cys_position_from_topo_start", "cys_position_from_topo_end",
+                "relative_cys_position_topology",
+                "window_cys_score_n", "window_cys_score_c",
+                "window_n_hydrophobicity", "window_c_hydrophobicity",
+                "window_transmembrane_tendency_n", "window_transmembrane_tendency_c",
+                "window_net_charge_n", "window_net_charge_c",
+                "window_polar_n", "window_polar_c",
+                "window_aliphatic_n", "window_aliphatic_c",
+                "window_aromatic_n", "window_aromatic_c",
+                "window_asparagine_n", "window_asparagine_c",
+                "Topological_length", "transmembrane_type",
+                "window_abs_charge_n", "window_abs_charge_c",
+                
+# Below this position is the "testing" variable
+                "window_asp_glu_n", "window_asp_glu_c"
+                 )
+
+## Features ON HOLD
+# "extracellular_type"
+
+# Features that made performance WORSE:                 
+# "window_flexibility_n", "window_flexibility_c"
+# "window_bulkiness_n", "window_bulkiness_c"
+# "window_n_hydrophilicity", "window_c_hydrophilicity"
+# "window_buried_n", "window_buried_c"
+# "window_tryptophan_n", "window_tryptophan_c",
+
+# Features that might be helpful but marginal at best:
+# "window_tyrosine_n", "window_tyrosine_c",
+# "window_phenylalanine_n", "window_phenylalanine_c"
+# "window_histidine_n", "window_histidine_c"
+# "relative_cys_position_protein"
+# "cys_position", "cys_distance_from_c_terminus"
+
+
+
+# Create a vector with all the relevant column names including the target variable
+all_columns <- c(predictors, "palm_number")
+
+# Create a subset of the data with only the relevant columns
+training_subset <- training_mammal[, all_columns]
+
+# Convert palm_number to a factor with valid level names
+training_subset$palm_number <- factor(training_subset$palm_number, 
+                                      levels = c(1, 0),  # Class1 is set as the first level
+                                      labels = c("Class1", "Class0"))
+
+# Setting up 10-fold cross-validation
+set.seed(123)
+control <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = TRUE,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+# Specifying the tuning grid
+tuning_grid <- expand.grid(
+  interaction.depth = c(18),  # Held constant
+  n.trees = c(2000), # tree grid
+  shrinkage = c(0.001, 0.002, 0.004, 0.006, 0.008, 0.01, 0.02, 0.03, 0.05, 0.1, 0.15),  # Learning rate (0.03 was also good!) (0.01)
+  n.minobsinnode = c(5)        # Minimum number of observations in the nodes (5)
+)
+
+# Train the GBM model
+gbm_model <- train(
+  palm_number ~ ., 
+  data = training_subset,
+  method = "gbm",
+  trControl = control,
+  tuneGrid = tuning_grid,
+  metric = "ROC",
+  verbose = FALSE
+)
+
+# Visualize the performance of different interaction depths
+plot(gbm_model)
+
+# Print the model results
+print(gbm_model)
+
+# xgb_predictions contains the saved predictions from the best model
+best_preds <- predict(gbm_model, newdata = training_subset)
+
+# Generate confusion matrix
+confusionMatrix(data = best_preds, reference = training_subset$palm_number)
+
+
+
+
+```
+
+
+## Model based on the tuning findings above
+```{r}
+
+library(caret)
+library(gbm)
+
+# Specifying the predictor variables for the Boosted Tree model
+predictors <- c("orientation", "Topological_location",
+                "cytoplasmic_type", 
+                 "cys_position_from_topo_start", "cys_position_from_topo_end",
+                "relative_cys_position_topology",
+                "window_cys_score_n", "window_cys_score_c",
+                "window_n_hydrophobicity", "window_c_hydrophobicity",
+                "window_transmembrane_tendency_n", "window_transmembrane_tendency_c",
+                "window_net_charge_n", "window_net_charge_c",
+                "window_polar_n", "window_polar_c",
+                "window_aliphatic_n", "window_aliphatic_c",
+                "window_aromatic_n", "window_aromatic_c",
+                "window_asparagine_n", "window_asparagine_c",
+                "Topological_length", "transmembrane_type",
+                "window_abs_charge_n", "window_abs_charge_c",
+                
+# Below this position is the "testing" variable
+                "window_asp_glu_n", "window_asp_glu_c"
+                 )
+
+## Features ON HOLD
+# "extracellular_type"
+
+# Features that made performance WORSE:                 
+# "window_flexibility_n", "window_flexibility_c"
+# "window_bulkiness_n", "window_bulkiness_c"
+# "window_n_hydrophilicity", "window_c_hydrophilicity"
+# "window_buried_n", "window_buried_c"
+# "window_tryptophan_n", "window_tryptophan_c",
+
+# Features that might be helpful but marginal at best:
+# "window_tyrosine_n", "window_tyrosine_c",
+# "window_phenylalanine_n", "window_phenylalanine_c"
+# "window_histidine_n", "window_histidine_c"
+# "relative_cys_position_protein"
+
+# "cys_position", "cys_distance_from_c_terminus"
+
+# Create a vector with all the relevant column names including the target variable
+all_columns <- c(predictors, "palm_number")
+
+# Create a subset of the data with only the relevant columns
+training_subset <- training_mammal[, all_columns]
+
+# Convert palm_number to a factor with valid level names
+training_subset$palm_number <- factor(training_subset$palm_number, 
+                                      levels = c(1, 0),  # Class1 is set as the first level
+                                      labels = c("Class1", "Class0"))
+
+# Setting up 10-fold cross-validation
+set.seed(123)
+control <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = TRUE,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+# Specifying the tuning grid
+tuning_grid <- expand.grid(
+  interaction.depth = c(18),  # Held constant
+  n.trees = c(2000), # tree grid, constant
+  shrinkage = c(0.008),  # 0.008 also good!
+  n.minobsinnode = c(5)        # Minimum number of observations in the nodes (5)
+)
+
+# Train the GBM model
+gbm_model <- train(
+  palm_number ~ ., 
+  data = training_subset,
+  method = "gbm",
+  trControl = control,
+  tuneGrid = tuning_grid,
+  metric = "ROC",
+  verbose = FALSE
+)
+
+# Print the model results
+print(gbm_model)
+
+# xgb_predictions contains the saved predictions from the best model
+best_preds <- predict(gbm_model, newdata = training_subset)
+
+# Generate confusion matrix
+confusionMatrix(data = best_preds, reference = training_subset$palm_number)
+
+
+```
+
+
+## Visualize feature importance
+
+```{r}
+
+# Calculate feature importance
+feature_importance <- varImp(gbm_model, scale = FALSE)
+
+# Print feature importance
+print(feature_importance)
+
+# Plot feature importance
+plot(feature_importance, top = 20)
+
+# Convert feature importance to a data frame
+importance_df <- data.frame(Feature = rownames(feature_importance$importance), 
+                            Importance = feature_importance$importance[,1])
+
+# Sort the data frame by importance in descending order and select the top 20 features
+top_20_importance_df <- importance_df[order(-importance_df$Importance),][1:20,]
+
+# Print the top 20 features to check
+print(top_20_importance_df)
+
+# Save the top 20 feature importance to a CSV file
+write.csv(top_20_importance_df, file = "top_20_feature_importance.csv", row.names = FALSE)
+
+```
+
+## ROC curves output
+```{r}
+library(caret)
+library(gbm)
+library(pROC)  # for ROC plotting
+
+# data preparation and initial setup steps remain the same
+
+# Setting up 10-fold cross-validation with predictions saving
+set.seed(123)
+control <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = TRUE,
+  classProbs = TRUE,  # Ensure class probabilities are returned
+  summaryFunction = twoClassSummary,
+  savePredictions = "final"  # Adjust to 'all' if you need every tuning parameter set
+)
+
+# Define the tuning grid and other previous settings
+
+# Train the GBM model
+gbm_model <- train(
+  palm_number ~ ., 
+  data = training_subset,
+  method = "gbm",
+  trControl = control,
+  tuneGrid = tuning_grid,
+  metric = "ROC",
+  verbose = FALSE
+)
+
+# Accessing the saved predictions for ROC curve plotting
+predictions <- gbm_model$pred
+
+# Create ROC curve plots and calculate AUCs
+aucs <- lapply(split(predictions, predictions$Resample), function(subset) {
+  # Specify the levels to ensure Class1 is treated as positive
+  roc_response <- roc(subset$obs, subset$Class1, levels = c("Class0", "Class1"))
+  plot(roc_response, main=paste("ROC Curve for", subset$Resample[1]))
+  return(auc(roc_response))  # Return the AUC for each fold
+})
+
+# Calculate mean AUC
+mean_auc <- mean(unlist(aucs))
+
+# Extract and combine ROC data from each fold
+roc_data_list <- lapply(split(predictions, predictions$Resample), function(subset) {
+  # Ensure Class1 is treated as the positive class
+  roc_response <- roc(subset$obs, subset$Class1, levels = c("Class0", "Class1"))
+  data.frame(
+    Fold = subset$Resample[1],
+    Specificity = roc_response$specificities,  # Directly use specificities
+    Sensitivity = roc_response$sensitivities,  # Sensitivity is the same as TPR
+    Thresholds = roc_response$thresholds
+  )
+})
+
+# Combine all folds into a single data frame
+roc_data <- do.call(rbind, roc_data_list)
+
+# Export to CSV
+write.csv(roc_data, "ROC_data_10_fold_cv.csv", row.names = FALSE)
+
+# Inform the user
+print(paste("ROC data has been saved to 'ROC_data_10_fold_cv.csv'. Mean AUC across all folds is:", mean_auc))
+
+
+```
+
+
+
+
+## Apply boosted tree model on mouse_holdout (MOUSE data derived solely from uniprot) 
+```{r}
+
+# Rename holdout_mouse to holdout_mouse_gbm_applied
+holdout_mouse_gbm_applied <- holdout_mouse
+
+# Convert palm_number to a factor with valid level names
+holdout_mouse_gbm_applied$palm_number <- factor(holdout_mouse_gbm_applied$palm_number, 
+                                                levels = c(1, 0), 
+                                                labels = c("Class1", "Class0"))
+
+# Predict the continuous probabilities for each class
+predicted_probs <- predict(gbm_model, newdata = holdout_mouse_gbm_applied, type = "prob")
+
+# Add the probability of being Class1 to the holdout_mouse_gbm_applied dataframe
+holdout_mouse_gbm_applied$probability_Class1 <- predicted_probs[,"Class1"]
+
+# Set threshold for classification
+threshold <- 0.5
+
+# Apply the threshold to create a binary classification
+holdout_mouse_gbm_applied$result_binary <- ifelse(holdout_mouse_gbm_applied$probability_Class1 >= threshold, "Class1", "Class0")
+
+# Convert 'result_binary' to a factor with the same levels as 'palm_number'
+holdout_mouse_gbm_applied$result_binary <- factor(holdout_mouse_gbm_applied$result_binary, levels = levels(holdout_mouse_gbm_applied$palm_number))
+
+# Generate confusion matrix with the adjusted classes
+confusion_matrix_adjusted <- confusionMatrix(data = holdout_mouse_gbm_applied$result_binary, reference = holdout_mouse_gbm_applied$palm_number)
+
+# Print the confusion matrix
+print(confusion_matrix_adjusted)
+
+# Calculate the ROC curve
+roc_result <- roc(response = holdout_mouse_gbm_applied$palm_number, 
+                  predictor = holdout_mouse_gbm_applied$probability_Class1)
+
+# Plot the ROC curve
+plot(roc_result, main = "ROC Curve for Final Model", col = "#1c61b6", lwd = 2)
+
+# Calculate and print the AUC
+auc_value <- auc(roc_result)
+print(sprintf("Area Under the Curve (AUC): %f", auc_value))
+
+```
+
+
+
+## Apply boosted tree model on holdout_mammal (MAMMAL data derived solely from uniprot) 
+```{r}
+
+# Rename holdout_mammal to holdout_mammal_gbm_applied
+holdout_mammal_gbm_applied <- holdout_mammal
+
+# Convert palm_number to a factor with valid level names
+holdout_mammal_gbm_applied$palm_number <- factor(holdout_mammal_gbm_applied$palm_number, 
+                                                levels = c(1, 0), 
+                                                labels = c("Class1", "Class0"))
+
+# Predict the continuous probabilities for each class
+predicted_probs <- predict(gbm_model, newdata = holdout_mammal_gbm_applied, type = "prob")
+
+# Add the probability of being Class1 to the holdout_mammal_gbm_applied dataframe
+holdout_mammal_gbm_applied$probability_Class1 <- predicted_probs[,"Class1"]
+
+# Set threshold for classification
+threshold <- 0.5
+
+# Apply the threshold to create a binary classification
+holdout_mammal_gbm_applied$result_binary <- ifelse(holdout_mammal_gbm_applied$probability_Class1 >= threshold, "Class1", "Class0")
+
+# Convert 'result_binary' to a factor with the same levels as 'palm_number'
+holdout_mammal_gbm_applied$result_binary <- factor(holdout_mammal_gbm_applied$result_binary, levels = levels(holdout_mammal_gbm_applied$palm_number))
+
+# Generate confusion matrix with the adjusted classes
+confusion_matrix_adjusted <- confusionMatrix(data = holdout_mammal_gbm_applied$result_binary, reference = holdout_mammal_gbm_applied$palm_number)
+
+# Print the confusion matrix
+print(confusion_matrix_adjusted)
+
+
+```
+
+
+
+## Apply boosted tree model on VIRUSES dataset
+# write the results to a csv
+```{r}
+
+# Rename the viral dataset
+viet_uniprot_swisspalm_gbm_applied <- viet_uniprot_swisspalm
+
+# Convert palm_number to a factor with valid level names
+viet_uniprot_swisspalm_gbm_applied$palm_number <- factor(viet_uniprot_swisspalm_gbm_applied$palm_number, 
+                                                levels = c(1, 0), 
+                                                labels = c("Class1", "Class0"))
+
+# Predict the continuous probabilities for each class
+predicted_probs <- predict(gbm_model, newdata = viet_uniprot_swisspalm_gbm_applied, type = "prob")
+
+# Add the probability of being Class1 to the viet_uniprot_swisspalm_gbm_applied dataframe
+viet_uniprot_swisspalm_gbm_applied$probability_Class1 <- predicted_probs[,"Class1"]
+
+# Set threshold for classification
+threshold <- 0.5
+
+# Apply the threshold to create a binary classification
+viet_uniprot_swisspalm_gbm_applied$result_binary <- ifelse(viet_uniprot_swisspalm_gbm_applied$probability_Class1 >= threshold, "Class1", "Class0")
+
+# Convert 'result_binary' to a factor with the same levels as 'palm_number'
+viet_uniprot_swisspalm_gbm_applied$result_binary <- factor(viet_uniprot_swisspalm_gbm_applied$result_binary, levels = levels(viet_uniprot_swisspalm_gbm_applied$palm_number))
+
+# Generate confusion matrix with the adjusted classes
+confusion_matrix_adjusted <- confusionMatrix(data = viet_uniprot_swisspalm_gbm_applied$result_binary, reference = viet_uniprot_swisspalm_gbm_applied$palm_number)
+
+# Print the confusion matrix
+print(confusion_matrix_adjusted)
+
+# Calculate MCC
+mcc <- function(confusion_matrix) {
+  tp <- as.numeric(confusion_matrix[["table"]]["Class1", "Class1"])
+  tn <- as.numeric(confusion_matrix[["table"]]["Class0", "Class0"])
+  fp <- as.numeric(confusion_matrix[["table"]]["Class0", "Class1"])
+  fn <- as.numeric(confusion_matrix[["table"]]["Class1", "Class0"])
+  
+  numerator <- (tp * tn) - (fp * fn)
+  denominator <- sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+  
+  if (denominator == 0) {
+    mcc <- 0  # To handle division by zero if any class totals are zero
+  } else {
+    mcc <- numerator / denominator
+  }
+  
+  return(mcc)
+}
+
+# Print MCC
+mcc_value <- mcc(confusion_matrix_adjusted)
+print(sprintf("Matthews Correlation Coefficient (MCC): %f", mcc_value))
+
+# Write the dataframe to a CSV file
+write_csv(viet_uniprot_swisspalm_gbm_applied, "viral_dataset_gbm_applied.csv")
+
+```
+
+
+## viral dataset with ROC curve and precision-recall curve
+```{r}
+
+library(pROC)
+library(caret)
+
+# Rename the viral dataset
+viet_uniprot_swisspalm_gbm_applied <- viet_uniprot_swisspalm
+
+# Convert palm_number to a factor with valid level names
+viet_uniprot_swisspalm_gbm_applied$palm_number <- factor(viet_uniprot_swisspalm_gbm_applied$palm_number, 
+                                                levels = c(1, 0), 
+                                                labels = c("Class1", "Class0"))
+
+# Predict the continuous probabilities for each class
+predicted_probs <- predict(gbm_model, newdata = viet_uniprot_swisspalm_gbm_applied, type = "prob")
+
+# Add the probability of being Class1 to the dataframe
+viet_uniprot_swisspalm_gbm_applied$probability_Class1 <- predicted_probs[,"Class1"]
+
+# Generate ROC curve data, specifying the correct levels explicitly
+roc_data <- roc(response = viet_uniprot_swisspalm_gbm_applied$palm_number, 
+                predictor = as.numeric(viet_uniprot_swisspalm_gbm_applied$probability_Class1),
+                levels = c("Class0", "Class1"))
+
+# Plot ROC curve
+plot(roc_data, main="ROC Curve", col="#1c61b6", lwd=2)
+
+# Print the area under the ROC curve (AUC)
+auc(roc_data)
+
+# Output the coordinates so the ROC curve can be generated in prism
+
+# Calculate specificity and sensitivity for all thresholds
+roc_coords <- coords(roc_data, "all", ret=c("threshold", "specificity", "sensitivity"))
+
+# Export the coordinates to a CSV file
+write.csv(roc_coords, "ROC_Coordinates.csv", row.names = FALSE)
+
+
+## precision recall curve
+
+library(pROC)
+
+# Total number of positives and negatives
+total_positives <- sum(viet_uniprot_swisspalm_gbm_applied$palm_number == "Class1")
+total_negatives <- sum(viet_uniprot_swisspalm_gbm_applied$palm_number == "Class0")
+
+# Calculate specificity and sensitivity for all thresholds
+roc_coords <- coords(roc_data, "all", ret=c("threshold", "specificity", "sensitivity"))
+
+# Calculate true positives and false positives
+roc_coords$tp <- roc_coords$sensitivity * total_positives
+roc_coords$fp <- (1 - roc_coords$specificity) * total_negatives
+
+# Calculate precision and recall (recall is the same as sensitivity)
+precision_recall_data <- data.frame(
+    Threshold = roc_coords$threshold,
+    Recall = roc_coords$sensitivity,  # Recall is the same as sensitivity
+    Precision = ifelse((roc_coords$tp + roc_coords$fp) > 0, roc_coords$tp / (roc_coords$tp + roc_coords$fp), 0)  # Prevent division by zero
+)
+
+# Handle any potential NA values in precision
+precision_recall_data$Precision[is.na(precision_recall_data$Precision)] <- 0
+
+# Export the precision and recall data to a CSV file
+write.csv(precision_recall_data, "Precision_Recall_Coordinates.csv", row.names = FALSE)
+
+print("Precision and recall values have been exported to 'Precision_Recall_Coordinates.csv'.")
+
+
+```
+
+# F1 score vs threshold
+```{r}
+
+# Calculate F1 Score
+precision_recall_data$F1 <- ifelse(
+  (precision_recall_data$Precision + precision_recall_data$Recall) > 0,
+  2 * (precision_recall_data$Precision * precision_recall_data$Recall) / (precision_recall_data$Precision + precision_recall_data$Recall),
+  0
+)
+
+# Load ggplot2 for plotting
+library(ggplot2)
+
+# Plot F1 Score vs. Threshold
+ggplot(precision_recall_data, aes(x = Threshold, y = F1)) +
+  geom_line(color = "blue") +
+  theme_minimal() +
+  labs(
+    title = "F1 Score vs. Threshold",
+    x = "Threshold",
+    y = "F1 Score"
+  ) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Save the plot to a file if needed
+ggsave("F1_Score_vs_Threshold.png", width = 8, height = 6)
+
+# Print a message indicating that the plot has been saved
+print("F1 Score vs. Threshold plot has been saved as 'F1_Score_vs_Threshold.png'.")
+
+# Write the precision-recall data with F1 scores to a CSV file
+write.csv(precision_recall_data, "Precision_Recall_F1_Scores.csv", row.names = FALSE)
+
+# Print a message indicating that the data has been saved
+print("Precision, recall, and F1 scores have been saved to 'Precision_Recall_F1_Scores.csv'.")
+
+```
+
+
+
+
+
+## Apply boosted tree model to KdelR2 in silico mutants
+## Visualize the results for each amino acid position
+```{r}
+
+# Predict probabilities using the GBM model
+predicted_probs <- predict(gbm_model, newdata = uniprot_kdelr2_Mm, type = "prob")
+
+# Add predicted probabilities to the dataframe
+uniprot_kdelr2_Mm$probs <- predicted_probs
+
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+
+# Extract probs$Class1 into a new column and filter the dataset for mutant cys_type
+mutant_data <- uniprot_kdelr2_Mm %>%
+  filter(Entry == "Q9CQM2") %>%
+  mutate(class1_prob = probs$Class1)
+
+# Create the bar plot and assign it to kdelr2_Mm_gbm_model
+kdelr2_Mm_gbm_model <- ggplot(mutant_data, aes(x = cys_position, y = class1_prob, fill = Topological_location)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(x = "Cysteine Position", y = NULL, fill = "Topological Location") +  # Removed y-axis title for more space
+  scale_fill_manual(values = c("Cytoplasmic" = "darkgrey", "Transmembrane" = "magenta", "Extracellular" = "cyan")) 
+
+print(kdelr2_Mm_gbm_model)
+
+# Save the plot using ggsave
+ggsave("kdelr2_Mm_gbm_model.pdf", plot = kdelr2_Mm_gbm_model, width = 10, height = 6)
+
+# Number of CYTOPLASMIC cysteines inferred palmitoylated
+# uniprot_kdelr2_Mm has been created
+# First, filter for rows that are "cytoplasmic"
+cytoplasmic_data <- uniprot_kdelr2_Mm %>% 
+                    filter(Topological_location == "Cytoplasmic")
+
+# Count the number of rows where probs$Class1 > 0.90
+cyto_rows_above_90 <- cytoplasmic_data %>% 
+                     filter(probs$Class1 > 0.90) %>% 
+                     nrow()
+
+# Count the number of rows where probs$Class1 <= 0.90
+cyto_rows_below_or_equal_90 <- cytoplasmic_data %>% 
+                              filter(probs$Class1 <= 0.90) %>% 
+                              nrow()
+
+# Display the numbers
+cyto_rows_above_90
+cyto_rows_below_or_equal_90
+
+# Number of TRANSMEMBRANE cysteines inferred palmitoylated
+# uniprot_kdelr2_Mm has been created
+# First, filter for rows that are "transmembrane"
+transmembrane_data <- uniprot_kdelr2_Mm %>% 
+                    filter(Topological_location == "Transmembrane")
+
+# Count the number of rows where probs$Class1 > 0.90
+trans_rows_above_90 <- transmembrane_data %>% 
+                     filter(probs$Class1 > 0.90) %>% 
+                     nrow()
+
+# Count the number of rows where probs$Class1 <= 0.90
+trans_rows_below_or_equal_90 <- transmembrane_data %>% 
+                              filter(probs$Class1 <= 0.90) %>% 
+                              nrow()
+
+# Display the numbers
+trans_rows_above_90
+trans_rows_below_or_equal_90
+
+# Print out the cys_position for each row that has probability > 0.90
+# Filter rows with probs$Class1 > 0.90
+filtered_rows <- uniprot_kdelr2_Mm %>%
+  filter(probs$Class1 > 0.90)
+
+# Print the value of cys_position for each filtered row
+print(filtered_rows$cys_position)
+
+rm(filtered_rows)
+
+```
+
+
+
+
+## Apply boosted tree model on BACTERIORHODOPSIN
+```{r}
+
+# Predict probabilities using the GBM model
+predicted_probs <- predict(gbm_model, newdata = bop_scanning_mutants, type = "prob")
+
+# Add predicted probabilities to the dataframe
+bop_scanning_mutants$probs <- predicted_probs
+
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+
+# Extract probs$Class1 into a new column and filter the dataset for mutant cys_type
+mutant_data <- bop_scanning_mutants %>%
+  mutate(class1_prob = probs$Class1)
+
+# Create the bar plot and assign it to bop_scanning_mutants_gbm_model
+bop_scanning_mutants_gbm_model <- ggplot(mutant_data, aes(x = cys_position, y = class1_prob, fill = Topological_location)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(x = "Cysteine Position", fill = "Topological Location") +  # Removed y-axis title for more space
+  scale_fill_manual(values = c("Cytoplasmic" = "darkgrey", "Transmembrane" = "magenta", "Extracellular" = "cyan"))
+
+print(bop_scanning_mutants_gbm_model)
+
+# Save the plot using ggsave
+ggsave("bop_scanning_mutants_gbm_model.pdf", plot = bop_scanning_mutants_gbm_model, width = 10, height = 6)
+
+# Number of CYTOPLASMIC cysteines inferred palmitoylated
+# bop_scanning_mutants has been created
+# First, filter for rows that are "cytoplasmic"
+cytoplasmic_data <- bop_scanning_mutants %>% 
+                    filter(Topological_location == "Cytoplasmic")
+
+# Count the number of rows where probs$Class1 > 0.50
+cyto_rows_above_50 <- cytoplasmic_data %>% 
+                     filter(probs$Class1 > 0.50) %>% 
+                     nrow()
+
+# Count the number of rows where probs$Class1 <= 0.50
+cyto_rows_below_or_equal_50 <- cytoplasmic_data %>% 
+                              filter(probs$Class1 <= 0.50) %>% 
+                              nrow()
+
+# Display the numbers
+cyto_rows_above_50
+cyto_rows_below_or_equal_50
+
+
+# Number of TRANSMEMBRANE cysteines inferred palmitoylated
+# bop_scanning_mutants has been created
+# First, filter for rows that are "transmembrane"
+transmembrane_data <- bop_scanning_mutants %>% 
+                    filter(Topological_location == "Transmembrane")
+
+# Count the number of rows where probs$Class1 > 0.50
+trans_rows_above_50 <- transmembrane_data %>% 
+                     filter(probs$Class1 > 0.50) %>% 
+                     nrow()
+
+# Count the number of rows where probs$Class1 <= 0.50
+trans_rows_below_or_equal_50 <- transmembrane_data %>% 
+                              filter(probs$Class1 <= 0.50) %>% 
+                              nrow()
+
+# Display the numbers
+trans_rows_above_50
+trans_rows_below_or_equal_50
+
+```
+
+## Visualization of the bacteriorhodopsin results compared to Rodenburg et al experimental data
+```{r}
+
+# Adapted numbering from Rodenburg et al to the sequence above (P02945 minus 5 amino acids)
+# M32 -> M45
+# A44 -> A57
+# L109 -> L122
+# F153 -> F166
+# N176 -> N189
+# R225 -> R238
+
+
+# define my_barplot_theme
+# Define the custom theme
+my_barplot_theme <- function() { 
+  theme_minimal() +
+  theme(
+    plot.title = element_blank(), # Remove the plot title
+    axis.title.x = element_text(size = 20), # X axis title font size
+    axis.title.y = element_text(size = 20), # Y axis title font size
+    axis.text.x = element_text(size = 20), # X axis labels font size
+    axis.text.y = element_text(size = 20) # Y axis labels font size
+  )
+}
+
+# First, filter for the specific cys_position values
+filtered_data <- bop_scanning_mutants %>%
+  filter(cys_position %in% c(45, 57, 122, 166, 189, 238)) %>%
+  select(cys_position, probs) %>%
+  unnest(probs) # This step treats probs as a list column
+
+# Now, plot using ggplot2, focusing on Class1 probabilities
+bop_probs_barplot <- ggplot(filtered_data, aes(x = factor(cys_position), y = Class1, group = cys_position)) +
+  geom_col() + 
+  labs(x = "Cys Position", y = "Probability") +
+  scale_x_discrete(name = "Cys Position", labels = as.character(filtered_data$cys_position)) +
+  scale_y_continuous(limits = c(0, 1)) + # Ensure y-axis ranges from 0 to 1
+  my_barplot_theme() # Apply the custom theme
+
+print(bop_probs_barplot)
+
+# Save the plot as an SVG
+ggsave("bop_probs_barplot.svg", plot = bop_probs_barplot, width = 8, height = 6, units = "in")
+
+# Create dataframe of experimental results from Rodenburg
+# Creating the new dataframe
+bop_scanning_mutants_rodenburg <- data.frame(
+  native_aa = c("M", "A", "L", "F", "N", "R"), # Native amino acids
+  cys_position = c(45, 57, 122, 166, 189, 238), # Cysteine positions
+  palm_fraction = c(0.82, 0.36, 0.38, 0.04, 0.11, 0.55) # Experimental Palmitoylation Fraction by Native LC-MS
+)
+
+# Plotting Rodenburg experimental results from Native LC-MS
+bop_palm_fraction_barplot <- ggplot(bop_scanning_mutants_rodenburg, aes(x = factor(cys_position), y = palm_fraction)) +
+  geom_col() + 
+  labs(x = "Cys Position", y = "Fraction Palmitoylated") +
+  scale_x_discrete(name = "Cys Position", labels = as.character(bop_scanning_mutants_rodenburg$cys_position)) +
+  scale_y_continuous(limits = c(0, 1)) + # Ensure y-axis ranges from 0 to 1
+  my_barplot_theme() # Apply the custom theme
+
+print(bop_palm_fraction_barplot)
+
+# Save the plot as an SVG
+ggsave("bop_palm_fraction_barplot.svg", plot = bop_palm_fraction_barplot, width = 8, height = 6, units = "in")
+
+
+```
+
+
+## Coorelation between topopalmtree output and experimental results from Rodenburg on bacteriorhodopsin
+```{r}
+
+# Step 1: Merge dataframes based on cys_position
+combined_data <- merge(filtered_data, bop_scanning_mutants_rodenburg, by = "cys_position")
+
+# Step 2: Calculate the Pearson correlation coefficient
+correlation_coefficient <- cor(combined_data$Class1, combined_data$palm_fraction)
+
+# Print the correlation coefficient to the console
+print(paste("Pearson correlation coefficient:", round(correlation_coefficient, 3)))
+
+# Step 3: Plotting
+library(ggplot2)
+library(svglite)
+
+
+bop_scatterplot <- ggplot(combined_data, aes(x = Class1, y = palm_fraction)) +
+  geom_point() + # Add points
+  geom_smooth(method = "lm", se = FALSE, color = "blue") + # Add a linear regression line without the standard error
+  geom_text(aes(label = cys_position), nudge_x = 0.04, nudge_y = 0.02, check_overlap = TRUE, size = 6.5) + # Adjust size within geom_text
+  labs(x = "Model Prediction (Class1 Probability)", y = "Experimental Palm Fraction", title = paste("Pearson correlation coefficient:", round(correlation_coefficient, 3))) +
+  scale_x_continuous(limits = c(0, 1)) + # Set x-axis to range from 0 to 1
+  scale_y_continuous(limits = c(0, 1)) + # Set y-axis to range from 0 to 1
+  my_barplot_theme() +
+  theme(
+    text = element_text(size = 20) # This attempts to globally set text size, but geom_text size is controlled within its own call
+  )
+
+print(bop_scatterplot)
+
+# Save the plot as an SVG
+ggsave("bop_scatterplot.svg", plot = bop_scatterplot, width = 8, height = 6, units = "in")
+
+# Save the plot as a pdf
+ggsave("bop_scatterplot.pdf", plot = bop_scatterplot, width = 8, height = 6, units = "in")
+
+
+```
+
+## Spearman coorelation
+```{r}
+
+# Step 1: Merge dataframes based on cys_position
+combined_data <- merge(filtered_data, bop_scanning_mutants_rodenburg, by = "cys_position")
+
+# Step 2: Calculate the Spearman correlation coefficient
+correlation_coefficient <- cor(combined_data$Class1, combined_data$palm_fraction, method = "spearman")
+print(paste("Spearman correlation coefficient:", round(correlation_coefficient, 3)))
+
+# Step 3: Plotting
+library(ggplot2)
+library(svglite)
+
+bop_scatterplot <- ggplot(combined_data, aes(x = Class1, y = palm_fraction)) +
+  geom_point() + # Add points
+  geom_smooth(method = "loess", se = FALSE, color = "blue") + # Add a loess curve without the standard error
+  geom_text(aes(label = cys_position), nudge_x = 0.04, nudge_y = 0.02, check_overlap = TRUE, size = 6.5) + # Add text labels
+  labs(x = "Model Prediction (Class1 Probability)", y = "Experimental Palm Fraction", title = paste("Spearman correlation coefficient:", round(correlation_coefficient, 3))) +
+  scale_x_continuous(limits = c(0, 1)) + # Set x-axis to range from 0 to 1
+  scale_y_continuous(limits = c(0, 1)) + # Set y-axis to range from 0 to 1
+  my_barplot_theme() +
+  theme(
+    text = element_text(size = 20) # Set global text size
+  )
+
+print(bop_scatterplot)
+
+# Save the plot as an SVG
+ggsave("bop_scatterplot.svg", plot = bop_scatterplot, width = 8, height = 6, units = "in")
+
+# Save the plot as a PDF
+ggsave("bop_scatterplot.pdf", plot = bop_scatterplot, width = 8, height = 6, units = "in")
+
+
+
+```
+
+
+
+
+
+```{r}
+library(tidyverse)
+
+# Ensure that filtered_data and bop_scanning_mutants_rodenburg have the same cys_position values for comparison
+filtered_data$dataset <- 'Model Prediction'
+bop_scanning_mutants_rodenburg$dataset <- 'Experimental Data'
+
+# Rename probs$Class1 to a common name for merging
+filtered_data <- filtered_data %>%
+  rename(palm_fraction = Class1)
+
+# Combine the data
+combined_data <- rbind(filtered_data[, c('cys_position', 'palm_fraction', 'dataset')],
+                       bop_scanning_mutants_rodenburg[, c('cys_position', 'palm_fraction', 'dataset')])
+
+# Plot the combined data
+ggplot(combined_data, aes(x = factor(cys_position), y = palm_fraction, fill = dataset)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  scale_fill_manual(values = c("Model Prediction" = "blue", "Experimental Data" = "red")) +
+  labs(x = "Cys Position", y = "Palm Fraction / Probability", title = "Comparison of Model Predictions and Experimental Data") +
+  theme_minimal() +
+  scale_x_discrete(name = "Cys Position", labels = as.character(unique(combined_data$cys_position)))
+```
+
+
+
+
+
+## Application of GBM model to Mouse Proteome
+```{r}
+
+# Read in mouse membrane proteome
+library(readr)
+uniprot_mouse_total_membrane_proteome <- read_csv("uniprot_mouse_total_membrane_proteome.csv")
+
+# Apply rev3 feature extraction to mouse membrane proteome
+uniprot_mouse_total_membrane_proteome <- topopalmtree_feature_extract_rev3(uniprot_mouse_total_membrane_proteome)
+
+# Combine the unknown orientations with the topological locations that are not suitable - this is all the rows that aren't suitable for model
+# Filter out rows where orientation is "unknown"
+uniprot_mouse_total_membrane_proteome_orientation_unknown <- uniprot_mouse_total_membrane_proteome %>%
+    filter(orientation == "unknown")
+
+# Combine the filtered dataframe with uniprot_mouse_total_membrane_not_suitable
+uniprot_mouse_total_membrane_proteome_not_suitable_for_model <- bind_rows(uniprot_mouse_total_membrane_proteome_orientation_unknown, 
+                                                            uniprot_mouse_total_membrane_proteome_rare_topological_locations)
+
+# remove the two dataframes that were prior to the join
+# rm(uniprot_mouse_total_membrane_proteome_orientation_unknown)
+# rm(uniprot_mouse_total_membrane_proteome_rare_topological_locations)
+
+# Now remove the orientation = unknown rows
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+    filter(orientation != "unknown")
+
+# One protein (Dio3) has a amino acid U (Selenocysteine) for which features cannot be calculated, so we will remove that row from the mouse dataset
+# Remove the row with Entry = Q91ZI8 and cys_position = 168
+uniprot_mouse_total_membrane_proteome <- uniprot_mouse_total_membrane_proteome %>%
+  filter(!(Entry == "Q91ZI8" & cys_position == 168))
+
+
+# Apply GBM model to mouse membrane proteome
+predicted_probs <- predict(gbm_model, newdata = uniprot_mouse_total_membrane_proteome, type = "prob")
+  
+# Add predicted probabilities to the dataframe
+uniprot_mouse_total_membrane_proteome$probs <- predicted_probs
+
+# Rename and simplify the dataframe now that probabilities have been applied
+# Rename dataframe and select specific columns
+uniprot_mouse_total_membrane_proteome_gbm_applied <- uniprot_mouse_total_membrane_proteome %>%
+  select(
+    Entry, 'Entry Name', 'Protein names',
+    'Gene Names', Organism, Length,
+    Sequence, Lipidation, transmembrane_type,
+    start, end, Topological_location,
+    Topological_sequence, orientation, cys_position,
+    cytoplasmic_type, extracellular_type, Topological_length,
+    cys_position_from_topo_start, cys_position_from_topo_end, relative_cys_position_topology,
+    relative_cys_position_protein, cys_distance_from_c_terminus, window_sequence_n,
+    window_sequence_c, window_cys_score_n, window_cys_score_c,
+    probs
+  )
+
+## Combine the GBM-applied dataframe to the one that has all the unsuitable Cys sites
+## This creates a comprehensive dataframe for which no Cys sites should have been lost in the pipeline
+
+# Remove columns from uniprot_mouse_total_membrane_proteome_not_suitable_for_model so it merges better
+uniprot_mouse_total_membrane_proteome_not_suitable_for_model <- uniprot_mouse_total_membrane_proteome_not_suitable_for_model %>%
+  select(
+    -`Gene Names (primary)`,
+    -`Topological domain`,
+    -Transmembrane,
+    -Intramembrane,
+    -`Signal peptide`
+  )
+
+# List of all column names from both dataframes
+all_columns <- union(colnames(uniprot_mouse_total_membrane_proteome_gbm_applied), 
+                     colnames(uniprot_mouse_total_membrane_proteome_not_suitable_for_model))
+
+# Add missing columns to each dataframe
+uniprot_mouse_total_membrane_proteome_gbm_applied[setdiff(all_columns, colnames(uniprot_mouse_total_membrane_proteome_gbm_applied))] <- NA
+uniprot_mouse_total_membrane_proteome_not_suitable_for_model[setdiff(all_columns, colnames(uniprot_mouse_total_membrane_proteome_not_suitable_for_model))] <- NA
+
+# Combine the dataframes so that the suitable/predicted rows and the unsuitable rows are together again
+uniprot_mouse_total_membrane_proteome_gbm_applied <- bind_rows(uniprot_mouse_total_membrane_proteome_gbm_applied, uniprot_mouse_total_membrane_proteome_not_suitable_for_model)
+
+# Make a simplified final version by removing columns
+uniprot_mouse_total_membrane_proteome_gbm_applied_simple <- uniprot_mouse_total_membrane_proteome_gbm_applied %>%
+    select("Entry", "Entry Name", "Protein names", "Gene Names",
+           "Organism", "Length", "Sequence", "Lipidation",
+           "transmembrane_type", "start", "end", "Topological_location",
+           "Topological_sequence", "orientation", "cys_position", "cytoplasmic_type",
+           "extracellular_type", "Topological_length", "cys_position_from_topo_start",
+           "cys_position_from_topo_end", "relative_cys_position_topology",
+           "relative_cys_position_protein", "cys_distance_from_c_terminus",
+           "window_sequence_n", "window_sequence_c", "window_cys_score_n",
+           "window_cys_score_c", "probs")
+
+# Plot the values for Vamp5
+vamp5 <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple[uniprot_mouse_total_membrane_proteome_gbm_applied_simple$Entry == 'Q9Z2P8', ]
+
+# Create a bar chart for Class1 probabilities
+ggplot(data = vamp5, aes(x = as.factor(cys_position), y = probs$Class1)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  labs(x = "Cysteine Position", y = "Probability") + 
+  ggtitle("Probability for Class1 by Cysteine Position in Entry Q9Z2P8") +
+  theme_minimal() +
+  scale_y_continuous(limits = c(0, 1))  # Set y-axis limits from 0 to 1
+
+```
+
+
+
+## E coli
+## Application of GBM model to E coli membrane proteome
+```{r}
+
+library(tidyverse)
+
+# Read in E_coli membrane proteome
+library(readr)
+uniprot_E_coli_total_membrane_proteome <- read_csv("uniprot_E_coli_membrane_proteome.csv")
+
+# Apply rev3 feature extraction to E_coli membrane proteome
+uniprot_E_coli_total_membrane_proteome <- topopalmtree_feature_extract_rev3(uniprot_E_coli_total_membrane_proteome)
+
+# Now remove the orientation = unknown rows
+uniprot_E_coli_total_membrane_proteome <- uniprot_E_coli_total_membrane_proteome %>%
+     filter(orientation != "unknown")
+
+# there is a single row with amino acid "X" that we will remove as the model cannot handle it
+# Filtering out rows with "X" in window_sequence_n or window_sequence_c
+uniprot_E_coli_total_membrane_proteome <- uniprot_E_coli_total_membrane_proteome %>%
+  filter(!grepl("X", window_sequence_n) & !grepl("X", window_sequence_c))
+
+# Apply GBM model to E_coli membrane proteome
+predicted_probs <- predict(gbm_model, newdata = uniprot_E_coli_total_membrane_proteome, type = "prob")
+  
+# Add predicted probabilities to the dataframe
+uniprot_E_coli_total_membrane_proteome$probs <- predicted_probs
+
+# Rename and simplify the dataframe now that probabilities have been applied
+# Rename dataframe and select specific columns
+uniprot_E_coli_total_membrane_proteome_gbm_applied <- uniprot_E_coli_total_membrane_proteome %>%
+  select(
+    Entry, 'Entry Name', 'Protein names',
+    'Gene Names', Organism, Length,
+    Sequence, Lipidation, transmembrane_type,
+    start, end, Topological_location,
+    Topological_sequence, orientation, cys_position,
+    cytoplasmic_type, extracellular_type, Topological_length,
+    cys_position_from_topo_start, cys_position_from_topo_end, relative_cys_position_topology,
+    relative_cys_position_protein, cys_distance_from_c_terminus, window_sequence_n,
+    window_sequence_c, window_cys_score_n, window_cys_score_c,
+    probs
+  )
+
+# Make a simplified final version by removing columns
+uniprot_E_coli_total_membrane_proteome_gbm_applied_simple <- uniprot_E_coli_total_membrane_proteome_gbm_applied %>%
+    select("Entry", "Entry Name", "Protein names", "Gene Names",
+           "Organism", "Length", "Sequence", "Lipidation",
+           "transmembrane_type", "start", "end", "Topological_location",
+           "Topological_sequence", "orientation", "cys_position", "cytoplasmic_type",
+           "extracellular_type", "Topological_length", "cys_position_from_topo_start",
+           "cys_position_from_topo_end", "relative_cys_position_topology",
+           "relative_cys_position_protein", "cys_distance_from_c_terminus",
+           "window_sequence_n", "window_sequence_c", "window_cys_score_n",
+           "window_cys_score_c", "probs")
+
+
+## Rank order plot of E coli sites
+
+# Extracting Class1 probabilities
+class1_probs <- uniprot_E_coli_total_membrane_proteome_gbm_applied_simple$probs[,1] # Assumes that Class1 is the first column
+
+# Creating a rank order plot
+library(ggplot2)
+
+# Creating a dataframe for plotting
+plot_data <- data.frame(Rank = rank(class1_probs), Probability = class1_probs)
+
+# Plotting
+ggplot(plot_data, aes(x = Rank, y = Probability)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "Rank Order Plot of Class1 Probabilities",
+       x = "Rank",
+       y = "Probability of Class1")
+
+# Number of rows with value > 0.75
+num_rows_above_75 <- sum(class1_probs > 0.75)
+
+# Total number of rows
+total_rows <- length(class1_probs)
+
+# Percentage of rows with value > 0.75
+percentage_above_75 <- (num_rows_above_75 / total_rows) * 100
+
+# Median value of the probabilities
+median_value <- median(class1_probs)
+
+# Mean value of the probabilities
+mean_value <- mean(class1_probs)
+
+# Print the results
+cat("Number of rows with value > 0.75:", num_rows_above_75, "\n")
+cat("Percentage of rows with value > 0.75:", percentage_above_75, "%\n")
+cat("Median value of probabilities:", median_value, "\n")
+cat("Mean value of probabilities:", mean_value, "\n")
+
+```
+
+
+
+
+## Similar stat calculations and rank order plot from Mouse
+```{r}
+
+library(dplyr)
+library(ggplot2)
+
+# Extract Class1 probabilities
+class1_probs_mouse <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple$probs[,1] # Adjust if necessary
+
+# Creating a dataframe for plotting
+plot_data_mouse <- data.frame(Rank = rank(class1_probs_mouse), Probability = class1_probs_mouse)
+
+# Plotting with an inverted y-axis
+ggplot(plot_data_mouse, aes(x = Rank, y = Probability)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "Rank Order Plot of S-Palmitoyl Probability for Mouse Transmembrane Proteome",
+       x = "Rank order of Cysteines",
+       y = "TopoPalmTree Probability")
+
+## Calculations
+# First, remove any NA values from the class1_probs vector
+# Extract Class1 probabilities from the mouse data frame
+class1_probs_mouse <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple$probs[,1] #  Class1 is the first column
+
+# Remove any NA values from the class1_probs_mouse vector before proceeding
+class1_probs_mouse_no_na <- na.omit(class1_probs_mouse)
+
+# Now perform the statistical calculations
+# Number of rows with value > 0.75, ignoring NAs
+num_rows_above_75 <- sum(class1_probs_mouse_no_na > 0.75)
+
+# Total number of rows, excluding NAs
+total_rows_no_na <- length(class1_probs_mouse_no_na)
+
+# Percentage of rows with value > 0.75, excluding NAs
+percentage_above_75 <- (num_rows_above_75 / total_rows_no_na) * 100
+
+# Median value of the probabilities, excluding NAs
+median_value <- median(class1_probs_mouse_no_na)
+
+# Mean value of the probabilities, excluding NAs
+mean_value <- mean(class1_probs_mouse_no_na)
+
+# Print the results, excluding NAs
+cat("Number of rows with value > 0.75:", num_rows_above_75, "\n")
+cat("Percentage of rows with value > 0.75:", percentage_above_75, "%\n")
+cat("Median value of probabilities:", median_value, "\n")
+cat("Mean value of probabilities:", mean_value, "\n")
+
+##
+# Now perform the statistical calculations for the low values
+# Number of rows with value < 0.25, ignoring NAs
+num_rows_below_25 <- sum(class1_probs_mouse_no_na < 0.25)
+
+# Total number of rows, excluding NAs
+total_rows_no_na <- length(class1_probs_mouse_no_na)
+
+# Percentage of rows with value < 0.25, excluding NAs
+percentage_below_25 <- (num_rows_below_25 / total_rows_no_na) * 100
+
+# Median value of the probabilities, excluding NAs
+median_value <- median(class1_probs_mouse_no_na)
+
+# Mean value of the probabilities, excluding NAs
+mean_value <- mean(class1_probs_mouse_no_na)
+
+# Print the results, excluding NAs
+cat("Number of rows with value < 0.25:", num_rows_below_25, "\n")
+cat("Percentage of rows with value < 0.25:", percentage_below_25, "%\n")
+cat("Median value of probabilities:", median_value, "\n")
+cat("Mean value of probabilities:", mean_value, "\n")
+
+# write the rank order plot to a csv so can bring it into prism
+# Extract Class1 probabilities
+class1_probs_mouse <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple$probs[,1] # Adjust if necessary
+
+# Creating a dataframe for plotting
+plot_data_mouse <- data.frame(Rank = rank(class1_probs_mouse), Probability = class1_probs_mouse)
+
+# Write the rank order plot data to a CSV file
+write.csv(plot_data_mouse, "Rank_Order_Plot_Data.csv", row.names = FALSE)
+
+# Print a message indicating that the data has been saved
+print("Rank order plot data has been saved to 'Rank_Order_Plot_Data.csv'.")
+
+```
+
+
+
+## SwissPalm Matching
+## Determine which predicted sites in the mouse proteome have been reported in Swisspalm
+
+```{r}
+
+# Initialize new column swisspalm_match with "no"
+uniprot_mouse_total_membrane_proteome_gbm_applied_simple$swisspalm_match <- "no"
+
+# Loop through each row in uniprot_mouse_total_membrane_proteome_gbm_applied_simple dataframe
+for (i in 1:nrow(uniprot_mouse_total_membrane_proteome_gbm_applied_simple)) {
+  # Get the values of Entry and cys_position for the current row
+  entry <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple$Entry[i]
+  cys_position <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple$cys_position[i]
+  
+  # Check if there is a match in swisspalm_all dataframe
+  if (any(swisspalm_all$uniprot_ac == entry & swisspalm_all$pos == cys_position)) {
+    # If there is a match, write "yes" into swisspalm_match column
+    uniprot_mouse_total_membrane_proteome_gbm_applied_simple$swisspalm_match[i] <- "yes"
+  }
+}
+
+# Split the 'probs' dataframe into two separate columns
+probs_class1 <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple$probs$Class1
+probs_class0 <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple$probs$Class0
+
+# Remove the original 'probs' column
+uniprot_mouse_total_membrane_proteome_gbm_applied_simple$probs <- NULL
+
+# Add the new columns to the main dataframe
+uniprot_mouse_total_membrane_proteome_gbm_applied_simple$probs_Class1 <- probs_class1
+uniprot_mouse_total_membrane_proteome_gbm_applied_simple$probs_Class0 <- probs_class0
+
+# Write the updated dataframe to a CSV file
+write_csv(uniprot_mouse_total_membrane_proteome_gbm_applied_simple, "mouse_proteome_gbm_applied.csv")
+
+```
+
+
+## UniProt Matching
+
+```{r}
+
+## Make a dataframe of all mouse palmitoyl sites (this includes transmembrane and non-transmembrane proteins)
+
+## read in the dataframe that has all Swiss-Prot transmembrane proteins
+library(readr)
+uniprot_mouse_all <- read_csv("uniprot_mouse_all.csv")
+
+# Split up the assigned palmitoyl positions into separate rows
+uniprot_mouse_all <- uniprot_mouse_all %>%
+    mutate(palm_position = str_extract_all(Lipidation, "(?<=LIPID )[0-9]+")) %>%
+    unnest(palm_position)
+
+# Keep only the rows that have a palmitoyl assignment
+uniprot_mouse_palmitoyl <- uniprot_mouse_all %>%
+  filter(!is.na(palm_position))
+
+#### Match the Uniprot Palmitoyl data to the mouse inference dataframe
+
+# Initialize new column uniprot_match with "no"
+uniprot_mouse_total_membrane_proteome_gbm_applied_simple$uniprot_match <- "no"
+
+
+# Loop through each row in uniprot_mouse_total_membrane_proteome_gbm_applied_simple dataframe
+for (i in 1:nrow(uniprot_mouse_total_membrane_proteome_gbm_applied_simple)) {
+  # Get the values of Entry and cys_position for the current row
+  entry <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple$Entry[i]
+  cys_position <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple$cys_position[i]
+  
+  # Check if there is a match in uniprot_mouse_palmitoyl dataframe
+  if (any(uniprot_mouse_palmitoyl$Entry == entry & uniprot_mouse_palmitoyl$palm_position == cys_position)) {
+    # If there is a match, write "yes" into uniprot_match column
+    uniprot_mouse_total_membrane_proteome_gbm_applied_simple$uniprot_match[i] <- "yes"
+  }
+}
+
+## Either database match
+### Create a column for rows that match to either swisspalm or uniprot
+uniprot_mouse_total_membrane_proteome_gbm_applied_simple <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple %>%
+  # Initialize the database_match column with "no"
+  mutate(database_match = "no") %>%
+  # Update database_match to "yes" where either swisspalm_match or uniprot_match is "yes"
+  mutate(database_match = if_else(swisspalm_match == "yes" | uniprot_match == "yes", "yes", database_match))
+
+
+```
+
+
+
+## Determine number of high scoring sites in mouse proteome that are novel (i.e. not reported in swisspalm)
+## Probability cutoff of 0.75
+```{r}
+
+# Filter rows with probs$Class1 > 0.75
+mouse_over_75 <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple[uniprot_mouse_total_membrane_proteome_gbm_applied_simple$probs_Class1 > 0.75, ]
+
+# Count the number of rows with database_match = "no" and "yes"
+no_match_count_75 <- sum(mouse_over_75$database_match == "no", na.rm = TRUE)
+yes_match_count_75 <- sum(mouse_over_75$database_match == "yes", na.rm = TRUE)
+
+# Print the counts
+cat("Number of rows with database_match = no:", no_match_count_75, "\n")
+cat("Number of rows with database_match = yes:", yes_match_count_75, "\n")
+
+# Create a pie chart
+counts <- c(no_match_count_75, yes_match_count_75)
+colors <- c("red", "blue")  # You can customize colors if needed
+
+pie(counts, labels = "", col = colors, main = "Database Match Distribution")
+
+```
+
+
+## Determine number of high scoring sites in mouse proteome that are novel (i.e. not reported in swisspalm)
+## Probability cutoff of 0.5
+```{r}
+
+# Filter rows with probs$Class1 > 0.5
+mouse_over_50 <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple[uniprot_mouse_total_membrane_proteome_gbm_applied_simple$probs_Class1 > 0.5, ]
+
+# Count the number of rows with database_match = "no" and "yes"
+no_match_count_50 <- sum(mouse_over_50$database_match == "no", na.rm = TRUE)
+yes_match_count_50 <- sum(mouse_over_50$database_match == "yes", na.rm = TRUE)
+
+# Print the counts
+cat("Number of rows with database_match = no:", no_match_count_50, "\n")
+cat("Number of rows with database_match = yes:", yes_match_count_50, "\n")
+
+# Create a pie chart
+counts <- c(no_match_count_50, yes_match_count_50)
+colors <- c("red", "blue")  # You can customize colors if needed
+
+pie(counts, labels = "", col = colors, main = "Database Match Distribution")
+
+```
+
+
+
+## Determine number of high scoring sites in mouse proteome that are novel (i.e. not reported in swisspalm)
+## Probability cutoff of 0.25
+```{r}
+
+# Filter rows with probs$Class1 > 0.25
+mouse_over_25 <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple[uniprot_mouse_total_membrane_proteome_gbm_applied_simple$probs_Class1 > 0.25, ]
+
+# Count the number of rows with database_match = "no" and "yes"
+no_match_count_25 <- sum(mouse_over_25$database_match == "no", na.rm = TRUE)
+yes_match_count_25 <- sum(mouse_over_25$database_match == "yes", na.rm = TRUE)
+
+# Print the counts
+cat("Number of rows with database_match = no:", no_match_count_25, "\n")
+cat("Number of rows with database_match = yes:", yes_match_count_25, "\n")
+
+# Create a pie chart
+counts <- c(no_match_count_25, yes_match_count_25)
+colors <- c("red", "blue")  # You can customize colors if needed
+
+pie(counts, labels = "", col = colors, main = "Database Match Distribution")
+
+
+```
+
+
+## ORA of mouse S-palmitoyl proteome compared to rest of gene list
+## Filtering for genes that have a site with probability > 0.75
+```{r}
+
+## Palmitoyl vector
+# Filter dataframe for Class1 probabilities greater than 0.75
+filtered_genes <- uniprot_mouse_total_membrane_proteome_gbm_applied_simple %>%
+  filter(probs$Class1 > 0.75)  # Ensure the column reference works, adjust if probs is stored differently
+
+# Extract unique gene names of the genes with at least one high probability site
+unique_gene_names <- unique(filtered_genes$`Gene Names`)
+
+# Store the unique gene names in a vector and rename it to 'palmitoyl_vector'
+palmitoyl_vector <- as.vector(unique_gene_names)
+
+# Split the entries on spaces and unlist to create a flat vector of gene names
+split_genes <- unlist(strsplit(as.character(palmitoyl_vector), " "))
+
+# Remove any potential duplicates and clean up names
+palmitoyl_vector <- unique(trimws(split_genes))
+
+
+### Reference vector
+# Extract unique gene names from the data
+unique_gene_names <- unique(uniprot_mouse_total_membrane_proteome_gbm_applied$`Gene Names`)
+
+# Store the unique gene names in a vector and rename it to 'reference_vector'
+reference_vector <- as.vector(unique_gene_names)
+
+# Split the entries on spaces and unlist to create a flat vector of gene names
+split_genes <- unlist(strsplit(as.character(reference_vector), " "))
+
+# Remove any potential duplicates and clean up names
+reference_vector <- unique(trimws(split_genes))
+
+```
+
+
+## Perform the ORA
+```{r}
+
+library(clusterProfiler)
+library(org.Mm.eg.db)
+
+
+# Prepare gene vectors by converting gene symbols to Entrez IDs
+palmitoyl_entrez <- bitr(palmitoyl_vector, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Mm.eg.db", drop = TRUE)
+reference_entrez <- bitr(reference_vector, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Mm.eg.db", drop = TRUE)
+
+# Handle genes that could not be mapped
+palmitoyl_unmapped <- setdiff(palmitoyl_vector, palmitoyl_entrez$SYMBOL)
+reference_unmapped <- setdiff(reference_vector, reference_entrez$SYMBOL)
+
+# Print unmapped genes (optional)
+print(paste("Unmapped palmitoyl genes:", paste(palmitoyl_unmapped, collapse = ", ")))
+print(paste("Unmapped reference genes:", paste(reference_unmapped, collapse = ", ")))
+
+# Perform ORA for each GO category: Biological Process (BP), Cellular Component (CC), Molecular Function (MF)
+go_bp <- enrichGO(gene          = palmitoyl_entrez$ENTREZID,
+                  universe      = reference_entrez$ENTREZID,
+                  OrgDb         = org.Mm.eg.db,
+                  keyType       = "ENTREZID",
+                  ont           = "BP",
+                  pAdjustMethod = "BH",
+                  qvalueCutoff  = 0.05)
+
+go_cc <- enrichGO(gene          = palmitoyl_entrez$ENTREZID,
+                  universe      = reference_entrez$ENTREZID,
+                  OrgDb         = org.Mm.eg.db,
+                  keyType       = "ENTREZID",
+                  ont           = "CC",
+                  pAdjustMethod = "BH",
+                  qvalueCutoff  = 0.05)
+
+go_mf <- enrichGO(gene          = palmitoyl_entrez$ENTREZID,
+                  universe      = reference_entrez$ENTREZID,
+                  OrgDb         = org.Mm.eg.db,
+                  keyType       = "ENTREZID",
+                  ont           = "MF",
+                  pAdjustMethod = "BH",
+                  qvalueCutoff  = 0.05)
+
+# Print results
+print(go_bp)
+print(go_cc)
+print(go_mf)
+
+# Optionally, visualize the results
+library(enrichplot)
+dotplot(go_bp) + ggtitle("Biological Process")
+dotplot(go_cc) + ggtitle("Cellular Component")
+dotplot(go_mf) + ggtitle("Molecular Function")
+
+```
+
+## Detach clusterProfiler and mm.org
+
+```{r}
+
+# Check if the package is on the search list
+if ("package:clusterProfiler" %in% search()) {
+    # Detach clusterProfiler package
+    detach("package:clusterProfiler", unload=TRUE)
+}
+
+# Check and detach org.Mm.eg.db similarly
+if ("package:org.Mm.eg.db" %in% search()) {
+    # Detach org.Mm.eg.db package
+    detach("package:org.Mm.eg.db", unload=TRUE)
+}
+
+```
+
+
+
+
+## Creating fasta file for GPS Palm comparison
+# Viral proteins
+# This is for export to use in GPS Palm
+```{r}
+
+# Write the viral dataset to FASTA format so it can be used with GPS Palm
+
+# Load dplyr if it's not already loaded
+if (!require(dplyr)) install.packages("dplyr")
+library(dplyr)
+
+# viet_uniprot_swisspalm has been read in
+
+# Select unique entries based on the Entry column
+unique_entries <- viet_uniprot_swisspalm %>% distinct(Entry, .keep_all = TRUE)
+
+# Function to create FASTA format string
+create_fasta_string <- function(entry, sequence) {
+  return(paste(">", entry, "\n", sequence, sep=""))
+}
+
+# Initialize an empty vector to store fasta formatted strings
+fasta_contents <- c()
+
+# Loop through each row of the unique entries dataframe
+for(i in 1:nrow(unique_entries)) {
+  entry <- unique_entries$Entry[i]
+  sequence <- unique_entries$Sequence[i]
+  
+  # Call the function and store the result
+  fasta_contents <- c(fasta_contents, create_fasta_string(entry, sequence))
+}
+
+# Concatenate all fasta strings with a newline separator
+final_fasta_content <- paste(fasta_contents, collapse="\n")
+
+# Write to a text file
+write(final_fasta_content, file = "viet_uniprot_swisspalm_for_gps_palm_fasta.txt")
+
+```
+
+
+## Analyzing the GPS palm output for viral proteins
+```{r}
+
+# Read in the output from low, medium and high threshold calculations from GPS Palm
+library(readr)
+gps_palm_viral_high <- read_table("gps_palm_output_virus/gps_palm_viral_high.txt")
+gps_palm_viral_medium <- read_table("gps_palm_output_virus/gps_palm_viral_medium.txt")
+gps_palm_viral_low <- read_table("gps_palm_output_virus/gps_palm_viral_low.txt")
+
+```
+
+
+## Analysis of GPS HIGH Threshold
+# Match the palmitoylation data from viet_uniprot_swisspalm with the output from GPS Palm
+# This will create a dataframe from which confusion matrix can be generated
+```{r}
+
+# Step 1: Add a new column `result_binary` to gps_palm_viral_high
+gps_palm_viral_high$result_binary <- "yes"
+
+# Step 2: Identify mismatches for each Entry/ID
+# First, get all unique cys_positions for each Entry in viet_uniprot_swisspalm
+unique_cys_positions <- viet_uniprot_swisspalm %>%
+  select(Entry, cys_position) %>%
+  distinct()
+
+# Join with gps_palm_viral_high to identify mismatches
+mismatch_data <- left_join(unique_cys_positions, gps_palm_viral_high, by = c("Entry" = "ID")) %>%
+  group_by(Entry) %>%
+  filter(!(cys_position %in% Position)) %>%
+  summarise(cys_position = unique(cys_position)) %>%
+  ungroup()
+
+# Rename columns to match gps_palm_viral_high structure
+names(mismatch_data) <- c("ID", "Position")
+
+# Add the missing columns with NA and "no" for result_binary
+mismatch_data$Peptide <- NA
+mismatch_data$Score <- NA
+mismatch_data$Cutoff <- NA
+mismatch_data$result_binary <- "no"
+
+# Step 3: Combine the original data with the mismatches
+gps_palm_viral_high <- bind_rows(gps_palm_viral_high, mismatch_data)
+
+# Optional: Sort by ID and Position
+gps_palm_viral_high <- gps_palm_viral_high %>% 
+  arrange(ID, Position)
+
+
+## Transferring the known palmitoyl site data from viral dataset to the GPS Palm output
+
+# Select only relevant columns from viet_uniprot_swisspalm for the join
+viet_uniprot_swisspalm_reduced <- viet_uniprot_swisspalm %>%
+  select(Entry, cys_position, palmitoylation)
+
+# Join the dataframes on both Entry/ID and cys_position/Position, 
+# and only add the palmitoylation column
+gps_palm_viral_high <- left_join(gps_palm_viral_high, viet_uniprot_swisspalm_reduced, 
+                                 by = c("ID" = "Entry", "Position" = "cys_position"))
+
+## Hand annotation of signal sequence or cleaved sites
+## GPS Palm is giving prediction info on regions that are cleaved or signal sequence, not analysed by TopoPalmTree
+## These are not palmitoylated, and are thus updated in the dataframe to reflect this
+# Update palmitoylation column, set NA to "no"
+gps_palm_viral_high <- gps_palm_viral_high %>%
+  mutate(palmitoylation = ifelse(is.na(palmitoylation), "no", palmitoylation))
+
+### Confusion matrix of results
+
+library(caret)
+
+# Adjust factor levels so that 'yes' is the first level
+gps_palm_viral_high$palmitoylation <- factor(gps_palm_viral_high$palmitoylation, levels = c("yes", "no"))
+gps_palm_viral_high$result_binary <- factor(gps_palm_viral_high$result_binary, levels = c("yes", "no"))
+
+# Create the confusion matrix
+conf_matrix <- confusionMatrix(gps_palm_viral_high$result_binary, gps_palm_viral_high$palmitoylation)
+
+# Print the confusion matrix
+print(conf_matrix)
+
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass['Pos Pred Value']
+recall <- conf_matrix$byClass['Sensitivity'] # Recall is the same as Sensitivity
+F1 <- 2 * (precision * recall) / (precision + recall)
+
+# Print precision, recall, and F1 score
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", F1, "\n")
+
+```
+
+
+
+## Same as above, but now with GPS Palm MEDIUM threshold
+```{r}
+
+# Step 1: Add a new column `result_binary` to gps_palm_viral_medium
+gps_palm_viral_medium$result_binary <- "yes"
+
+# Step 2: Identify mismatches for each Entry/ID
+# First, get all unique cys_positions for each Entry in viet_uniprot_swisspalm
+unique_cys_positions <- viet_uniprot_swisspalm %>%
+  select(Entry, cys_position) %>%
+  distinct()
+
+# Join with gps_palm_viral_medium to identify mismatches
+mismatch_data <- left_join(unique_cys_positions, gps_palm_viral_medium, by = c("Entry" = "ID")) %>%
+  group_by(Entry) %>%
+  filter(!(cys_position %in% Position)) %>%
+  summarise(cys_position = unique(cys_position)) %>%
+  ungroup()
+
+# Rename columns to match gps_palm_viral_medium structure
+names(mismatch_data) <- c("ID", "Position")
+
+# Add the missing columns with NA and "no" for result_binary
+mismatch_data$Peptide <- NA
+mismatch_data$Score <- NA
+mismatch_data$Cutoff <- NA
+mismatch_data$result_binary <- "no"
+
+# Step 3: Combine the original data with the mismatches
+gps_palm_viral_medium <- bind_rows(gps_palm_viral_medium, mismatch_data)
+
+# Optional: Sort by ID and Position
+gps_palm_viral_medium <- gps_palm_viral_medium %>% 
+  arrange(ID, Position)
+
+
+## Transferring the known palmitoyl site data from viral dataset to the GPS Palm output
+
+# Select only relevant columns from viet_uniprot_swisspalm for the join
+viet_uniprot_swisspalm_reduced <- viet_uniprot_swisspalm %>%
+  select(Entry, cys_position, palmitoylation)
+
+# Join the dataframes on both Entry/ID and cys_position/Position, 
+# and only add the palmitoylation column
+gps_palm_viral_medium <- left_join(gps_palm_viral_medium, viet_uniprot_swisspalm_reduced, 
+                                 by = c("ID" = "Entry", "Position" = "cys_position"))
+
+## Hand annotation of signal sequence or cleaved sites
+## GPS Palm is giving prediction info on regions that are cleaved or signal sequence, not analysed by TopoPalmTree
+## These are not palmitoylated, and are thus updated in the dataframe to reflect this
+# Update palmitoylation column, set NA to "no"
+gps_palm_viral_medium <- gps_palm_viral_medium %>%
+  mutate(palmitoylation = ifelse(is.na(palmitoylation), "no", palmitoylation))
+
+### Confusion matrix of results
+
+library(caret)
+
+# Adjust factor levels so that 'yes' is the first level
+gps_palm_viral_medium$palmitoylation <- factor(gps_palm_viral_medium$palmitoylation, levels = c("yes", "no"))
+gps_palm_viral_medium$result_binary <- factor(gps_palm_viral_medium$result_binary, levels = c("yes", "no"))
+
+# Create the confusion matrix
+conf_matrix <- confusionMatrix(gps_palm_viral_medium$result_binary, gps_palm_viral_medium$palmitoylation)
+
+# Print the confusion matrix
+print(conf_matrix)
+
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass['Pos Pred Value']
+recall <- conf_matrix$byClass['Sensitivity'] # Recall is the same as Sensitivity
+F1 <- 2 * (precision * recall) / (precision + recall)
+
+# Print precision, recall, and F1 score
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", F1, "\n")
+
+```
+
+
+
+## Same as above, but now with GPS Palm LOW threshold
+```{r}
+
+# Step 1: Add a new column `result_binary` to gps_palm_viral_low
+gps_palm_viral_low$result_binary <- "yes"
+
+# Step 2: Identify mismatches for each Entry/ID
+# First, get all unique cys_positions for each Entry in viet_uniprot_swisspalm
+unique_cys_positions <- viet_uniprot_swisspalm %>%
+  select(Entry, cys_position) %>%
+  distinct()
+
+# Join with gps_palm_viral_low to identify mismatches
+mismatch_data <- left_join(unique_cys_positions, gps_palm_viral_low, by = c("Entry" = "ID")) %>%
+  group_by(Entry) %>%
+  filter(!(cys_position %in% Position)) %>%
+  summarise(cys_position = unique(cys_position)) %>%
+  ungroup()
+
+# Rename columns to match gps_palm_viral_low structure
+names(mismatch_data) <- c("ID", "Position")
+
+# Add the missing columns with NA and "no" for result_binary
+mismatch_data$Peptide <- NA
+mismatch_data$Score <- NA
+mismatch_data$Cutoff <- NA
+mismatch_data$result_binary <- "no"
+
+# Step 3: Combine the original data with the mismatches
+gps_palm_viral_low <- bind_rows(gps_palm_viral_low, mismatch_data)
+
+# Optional: Sort by ID and Position
+gps_palm_viral_low <- gps_palm_viral_low %>% 
+  arrange(ID, Position)
+
+
+## Transferring the known palmitoyl site data from viral dataset to the GPS Palm output
+
+# Select only relevant columns from viet_uniprot_swisspalm for the join
+viet_uniprot_swisspalm_reduced <- viet_uniprot_swisspalm %>%
+  select(Entry, cys_position, palmitoylation)
+
+# Join the dataframes on both Entry/ID and cys_position/Position, 
+# and only add the palmitoylation column
+gps_palm_viral_low <- left_join(gps_palm_viral_low, viet_uniprot_swisspalm_reduced, 
+                                 by = c("ID" = "Entry", "Position" = "cys_position"))
+
+## Hand annotation of signal sequence or cleaved sites
+## GPS Palm is giving prediction info on regions that are cleaved or signal sequence, not analysed by TopoPalmTree
+## These are not palmitoylated, and are thus updated in the dataframe to reflect this
+# Update palmitoylation column, set NA to "no"
+gps_palm_viral_low <- gps_palm_viral_low %>%
+  mutate(palmitoylation = ifelse(is.na(palmitoylation), "no", palmitoylation))
+
+### Confusion matrix of results
+
+library(caret)
+
+# Adjust factor levels so that 'yes' is the first level
+gps_palm_viral_low$palmitoylation <- factor(gps_palm_viral_low$palmitoylation, levels = c("yes", "no"))
+gps_palm_viral_low$result_binary <- factor(gps_palm_viral_low$result_binary, levels = c("yes", "no"))
+
+# Create the confusion matrix
+conf_matrix <- confusionMatrix(gps_palm_viral_low$result_binary, gps_palm_viral_low$palmitoylation)
+
+# Print the confusion matrix
+print(conf_matrix)
+
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass['Pos Pred Value']
+recall <- conf_matrix$byClass['Sensitivity'] # Recall is the same as Sensitivity
+F1 <- 2 * (precision * recall) / (precision + recall)
+
+# Print precision, recall, and F1 score
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", F1, "\n")
+
+```
+
+
+

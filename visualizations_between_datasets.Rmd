@@ -1,0 +1,2888 @@
+---
+title: "visualization"
+output: html_document
+date: "2023-12-06"
+---
+
+```{r}
+library(ggplot2)
+
+# Define the custom theme
+my_theme <- theme(
+  plot.title = element_text(size = 16),       # Title font size
+  axis.title = element_text(size = 12),       # Axis title font size
+  axis.text = element_text(size = 16)         # Axis labels font size
+)
+```
+
+
+
+# Percentage of palmitoylation for different types of proteins (Multi, Type I/III, Type II/IV)
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Assuming 'training_mammal' is your dataframe and it has columns 'transmembrane_type' and 'palmitoylation'
+
+# Calculate the fraction of palmitoylation = yes for each Entry within each transmembrane type
+training_mammal_stats <- training_mammal %>%
+  group_by(transmembrane_type, Entry) %>%
+  summarize(
+    Total = n(),
+    YesCount = sum(palmitoylation == "yes"),
+    FractionYes = YesCount / Total,
+    .groups = 'drop'  # Drop grouping so that the data frame is not grouped when returned
+  )
+
+# Adjusting factor levels for transmembrane_type
+training_mammal_stats$transmembrane_type <- factor(training_mammal_stats$transmembrane_type, 
+                                                   levels = c("multi", "type I/III", "type II/IV"))
+
+# Create a boxplot
+ggplot(training_mammal_stats, aes(x = transmembrane_type, y = FractionYes)) +
+  geom_boxplot() +
+  labs(title = "Palmitoylation Per Protein (Training Data)",
+       x = "Transmembrane Type",
+       y = "Fraction of Palmitoylation = Yes") +
+  my_theme  # Assuming my_theme is predefined
+
+####
+
+# Assuming holdout_mammal is your dataframe
+holdout_mammal_stats <- holdout_mammal %>%
+  group_by(transmembrane_type, Entry) %>%
+  summarize(
+    Total = n(),
+    YesCount = sum(palmitoylation == "yes"),
+    FractionYes = YesCount / Total,
+    .groups = 'drop'
+  )
+
+# Adjusting factor levels for transmembrane_type
+holdout_mammal_stats$transmembrane_type <- factor(holdout_mammal_stats$transmembrane_type, 
+                                                  levels = c("multi", "type I/III", "type II/IV"))
+
+# Create a boxplot
+ggplot(holdout_mammal_stats, aes(x = transmembrane_type, y = FractionYes)) +
+  geom_boxplot() +
+  labs(title = "Palmitoylation Per Protein (Holdout Mammal)",
+       x = "Transmembrane Type",
+       y = "Fraction of Palmitoylation = Yes") +
+  my_theme
+
+#####
+
+# Assuming viet_uniprot_swisspalm is your dataframe
+viet_uniprot_swisspalm_stats <- viet_uniprot_swisspalm %>%
+  group_by(transmembrane_type, Entry) %>%
+  summarize(
+    Total = n(),
+    YesCount = sum(palmitoylation == "yes"),
+    FractionYes = YesCount / Total,
+    .groups = 'drop'
+  )
+
+# Adjusting factor levels for transmembrane_type
+viet_uniprot_swisspalm_stats$transmembrane_type <- factor(viet_uniprot_swisspalm_stats$transmembrane_type, 
+                                                          levels = c("multi", "type I/III", "type II/IV"))
+
+# Create a boxplot
+ggplot(viet_uniprot_swisspalm_stats, aes(x = transmembrane_type, y = FractionYes)) +
+  geom_boxplot() +
+  labs(title = "Palmitoylation Per Protein (Viral Dataset)",
+       x = "Transmembrane Type",
+       y = "Fraction of Palmitoylation = Yes") +
+  my_theme
+
+```
+
+
+## Pie charts comparing number of Cys in each transmembrane type for the 3 datasets
+
+```{r}
+
+# Training Mammal Data
+training_mammal_pie <- training_mammal %>%
+  count(transmembrane_type) %>%
+  arrange(match(transmembrane_type, c("multi", "type I/III", "type II/IV"))) %>%
+  ggplot(aes(x = "", y = n, fill = transmembrane_type)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  scale_fill_manual(values = c("multi" = "red", "type I/III" = "blue", "type II/IV" = "green")) +
+  labs(fill = "Transmembrane Type", title = "Transmembrane Type Distribution in Training Mammal") +
+  theme_void()
+
+training_mammal_pie
+
+# Holdout Mammal Data
+holdout_mammal_pie <- holdout_mammal %>%
+  count(transmembrane_type) %>%
+  arrange(match(transmembrane_type, c("multi", "type I/III", "type II/IV"))) %>%
+  ggplot(aes(x = "", y = n, fill = transmembrane_type)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  scale_fill_manual(values = c("multi" = "red", "type I/III" = "blue", "type II/IV" = "green")) +
+  labs(fill = "Transmembrane Type", title = "Transmembrane Type Distribution in Holdout Mammal") +
+  theme_void()
+
+holdout_mammal_pie
+
+# Viet Uniprot Swisspalm Data
+viet_uniprot_swisspalm_pie <- viet_uniprot_swisspalm %>%
+  count(transmembrane_type) %>%
+  arrange(match(transmembrane_type, c("multi", "type I/III", "type II/IV"))) %>%
+  ggplot(aes(x = "", y = n, fill = transmembrane_type)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  scale_fill_manual(values = c("multi" = "red", "type I/III" = "blue", "type II/IV" = "green")) +
+  labs(fill = "Transmembrane Type", title = "Transmembrane Type Distribution in Viet Uniprot Swisspalm") +
+  theme_void()
+
+viet_uniprot_swisspalm_pie
+
+```
+
+## percentages for the training_mammal dataset
+```{r}
+# Training Mammal Data
+training_mammal_pie <- training_mammal %>%
+  count(transmembrane_type) %>%
+  mutate(percentage = n / sum(n) * 100) %>%
+  arrange(match(transmembrane_type, c("multi", "type I/III", "type II/IV"))) %>%
+  ggplot(aes(x = "", y = n, fill = transmembrane_type)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  scale_fill_manual(values = c("multi" = "red", "type I/III" = "blue", "type II/IV" = "green")) +
+  labs(fill = "Transmembrane Type", title = "Transmembrane Type Distribution in Training Mammal") +
+  theme_void()
+
+# Print training mammal percentages
+print(training_mammal %>%
+  count(transmembrane_type) %>%
+  mutate(percentage = n / sum(n) * 100))
+
+training_mammal_pie
+
+```
+
+
+
+# Palmitoylation frequency for inward vs outward in TRAINING MAMMAL dataset
+```{r}
+
+# Function to calculate and print palmitoylation percentages
+calculate_and_print_percentages <- function(data, orientation) {
+  palmitoylation_table <- table(data$palmitoylation)
+  total_count <- sum(palmitoylation_table)
+  
+  # Calculate "yes" count and percentage
+  if ('yes' %in% names(palmitoylation_table)) {
+    yes_count <- palmitoylation_table['yes']
+    percentage_yes <- (yes_count / total_count) * 100
+  } else {
+    yes_count <- 0
+    percentage_yes <- 0
+  }
+  
+  # Calculate "no" count and percentage
+  if ('no' %in% names(palmitoylation_table)) {
+    no_count <- palmitoylation_table['no']
+    percentage_no <- (no_count / total_count) * 100
+  } else {
+    no_count = 0
+    percentage_no = 0
+  }
+  
+  cat(sprintf("Palmitoylation percentages for %s orientation:\n", orientation))
+  cat(sprintf("Yes: %d (%.2f%%)\n", yes_count, percentage_yes))
+  cat(sprintf("No: %d (%.2f%%)\n", no_count, percentage_no))
+  cat(sprintf("Total count: %d\n", total_count))
+  cat("\n")
+}
+
+# Filter for inward orientation and calculate percentages
+inward_data <- subset(training_mammal, orientation == "inward")
+calculate_and_print_percentages(inward_data, "inward")
+
+# Filter for outward orientation and calculate percentages
+outward_data <- subset(training_mammal, orientation == "outward")
+calculate_and_print_percentages(outward_data, "outward")
+```
+
+# palmitoylation frequency for inward vs outward in HOLDOUT MAMMAL dataset
+```{r}
+# Function to calculate and print palmitoylation percentages
+calculate_and_print_percentages <- function(data, orientation) {
+  palmitoylation_table <- table(data$palmitoylation)
+  total_count <- sum(palmitoylation_table)
+  if ('yes' %in% names(palmitoylation_table)) {
+    yes_count <- palmitoylation_table['yes']
+    percentage_yes <- (yes_count / total_count) * 100
+  } else {
+    percentage_yes <- 0
+  }
+  
+  cat(sprintf("Palmitoylation percentages for %s orientation:\n", orientation))
+  cat(sprintf("Yes: %.2f%%\n", percentage_yes))
+  cat(sprintf("Total count: %d\n", total_count))
+  cat("\n")
+}
+
+# Filter for inward orientation and calculate percentages
+inward_data <- subset(holdout_mammal, orientation == "inward")
+calculate_and_print_percentages(inward_data, "inward")
+
+# Filter for outward orientation and calculate percentages
+outward_data <- subset(holdout_mammal, orientation == "outward")
+calculate_and_print_percentages(outward_data, "outward")
+
+```
+
+# palmitoylation frequency for inward vs outward in VIRAL dataset
+```{r}
+
+# Function to calculate and print palmitoylation percentages
+calculate_and_print_percentages <- function(data, orientation) {
+  palmitoylation_table <- table(data$palmitoylation)
+  total_count <- sum(palmitoylation_table)
+  if ('yes' %in% names(palmitoylation_table)) {
+    yes_count <- palmitoylation_table['yes']
+    percentage_yes <- (yes_count / total_count) * 100
+  } else {
+    percentage_yes <- 0
+  }
+  
+  cat(sprintf("Palmitoylation percentages for %s orientation:\n", orientation))
+  cat(sprintf("Yes: %.2f%%\n", percentage_yes))
+  cat(sprintf("Total count: %d\n", total_count))
+  cat("\n")
+}
+
+# Filter for inward orientation and calculate percentages
+inward_data <- subset(viet_uniprot_swisspalm, orientation == "inward")
+calculate_and_print_percentages(inward_data, "inward")
+
+# Filter for outward orientation and calculate percentages
+outward_data <- subset(viet_uniprot_swisspalm, orientation == "outward")
+calculate_and_print_percentages(outward_data, "outward")
+
+```
+
+# plot of orientation and relative position in topology
+```{r}
+
+# Load the necessary library
+library(ggplot2)
+
+# Filter for inward and outward orientations
+inward_data <- subset(training_mammal, orientation == "inward")
+outward_data <- subset(training_mammal, orientation == "outward")
+
+# Create boxplots
+# Plot for inward orientation
+ggplot(inward_data, aes(x = palmitoylation, y = relative_cys_position_topology, fill = palmitoylation)) +
+  geom_boxplot() +
+  ggtitle("Inward Orientation: Relative Cys Position Topology by Palmitoylation") +
+  xlab("Palmitoylation") +
+  ylab("Relative Cys Position Topology")
+
+# Plot for outward orientation
+ggplot(outward_data, aes(x = palmitoylation, y = relative_cys_position_topology, fill = palmitoylation)) +
+  geom_boxplot() +
+  ggtitle("Outward Orientation: Relative Cys Position Topology by Palmitoylation") +
+  xlab("Palmitoylation") +
+  ylab("Relative Cys Position Topology")
+
+```
+
+
+## Scatter plot of relative cys position in topology on x axis and 
+
+```{r}
+
+# Filter the data for 'inward' orientation
+inward_data <- training_mammal[training_mammal$orientation == "inward", ]
+
+# Create the scatter plot with jitter and adjusted alpha for transparency
+ggplot(inward_data, aes(x = relative_cys_position_topology, y = cys_position_from_topo_end, color = palmitoylation)) +
+  geom_jitter(alpha = 0.5, width = 0.2, height = 0.2) +  # Add jittered points with semi-transparency
+  scale_color_manual(values = c("no" = "red", "yes" = "blue")) +  # Color mapping
+  labs(title = "Inward",
+       x = "Relative Cys Position Topology",
+       y = "Cys Position from Topo End") +
+  theme_minimal()  # Minimal theme for cleaner look
+
+# Filter the data for 'outward' orientation
+outward_data <- training_mammal[training_mammal$orientation == "outward", ]
+
+# Create the scatter plot with jitter and adjusted alpha for transparency
+ggplot(outward_data, aes(x = relative_cys_position_topology, y = cys_position_from_topo_start, color = palmitoylation)) +
+  geom_jitter(alpha = 0.5, width = 0.2, height = 0.2) +  # Add jittered points with semi-transparency
+  scale_color_manual(values = c("no" = "red", "yes" = "blue")) +  # Color mapping
+  labs(title = "Outward",
+       x = "Relative Cys Position Topology",
+       y = "Cys Position from Topo Start") +
+  theme_minimal()  # Minimal theme for cleaner look
+
+```
+
+
+## Statistics for frequency of palmitoylation on cytoplasmic types
+# Training data
+```{r}
+
+# Function to calculate and print palmitoylation percentages
+calculate_and_print_percentages <- function(data, cytoplasmic_type) {
+  palmitoylation_table <- table(data$palmitoylation)
+  total_count <- sum(palmitoylation_table)
+  
+  # Calculate "yes" count and percentage
+  if ('yes' %in% names(palmitoylation_table)) {
+    yes_count <- palmitoylation_table['yes']
+    percentage_yes <- (yes_count / total_count) * 100
+  } else {
+    yes_count <- 0
+    percentage_yes <- 0
+  }
+  
+  # Calculate "no" count and percentage
+  if ('no' %in% names(palmitoylation_table)) {
+    no_count <- palmitoylation_table['no']
+    percentage_no <- (no_count / total_count) * 100
+  } else {
+    no_count = 0
+    percentage_no = 0
+  }
+  
+  cat(sprintf("Palmitoylation percentages for %s cytoplasmic type:\n", cytoplasmic_type))
+  cat(sprintf("Yes: %d (%.2f%%)\n", yes_count, percentage_yes))
+  cat(sprintf("No: %d (%.2f%%)\n", no_count, percentage_no))
+  cat(sprintf("Total count: %d\n", total_count))
+  cat("\n")
+}
+
+# Filter for head cytoplasmic type and calculate percentages
+head_data <- subset(training_mammal, cytoplasmic_type == "head")
+calculate_and_print_percentages(head_data, "head")
+
+# Filter for loop cytoplasmic type and calculate percentages
+loop_data <- subset(training_mammal, cytoplasmic_type == "loop")
+calculate_and_print_percentages(loop_data, "loop")
+
+# Filter for tail cytoplasmic type and calculate percentages
+tail_data <- subset(training_mammal, cytoplasmic_type == "tail")
+calculate_and_print_percentages(tail_data, "tail")
+
+
+```
+
+
+
+
+
+## Density of palmitoylation on cytoplasmic domains
+# Relative position
+```{r}
+
+# Filtering for cytoplasmic_type = 'head' and creating the plot
+training_mammal %>%
+  filter(cytoplasmic_type == 'head') %>%
+  ggplot(aes(x = relative_cys_position_topology, fill = palmitoylation)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("no" = "blue", "yes" = "red")) +
+  labs(title = "Density Plot for Cytoplasmic Type: Head",
+       x = "Relative Cys Position Topology",
+       y = "Density") +
+  my_theme
+
+# Repeat the process for cytoplasmic_type = 'loop'
+training_mammal %>%
+  filter(cytoplasmic_type == 'loop') %>%
+  ggplot(aes(x = relative_cys_position_topology, fill = palmitoylation)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("no" = "blue", "yes" = "red")) +
+  labs(title = "Density Plot for Cytoplasmic Type: Loop",
+       x = "Relative Cys Position Topology",
+       y = "Density") +
+  my_theme
+
+# Repeat the process for cytoplasmic_type = 'tail'
+training_mammal %>%
+  filter(cytoplasmic_type == 'tail') %>%
+  ggplot(aes(x = relative_cys_position_topology, fill = palmitoylation)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("no" = "blue", "yes" = "red")) +
+  labs(title = "Density Plot for Cytoplasmic Type: Tail",
+       x = "Relative Cys Position Topology",
+       y = "Density") +
+  my_theme
+
+
+
+```
+
+## Density of palmitoylation on cytoplasmic domains
+# Absolute distance in amino acids
+```{r}
+
+# Filtering for cytoplasmic_type = 'head' and creating the plot
+training_mammal %>%
+  filter(cytoplasmic_type == 'head') %>%
+  ggplot(aes(x = cys_position_from_topo_end, fill = palmitoylation)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("no" = "blue", "yes" = "red")) +
+  labs(title = "Density Plot for Cytoplasmic Type: Head",
+       x = "Cys Position from Topo End",
+       y = "Density") +
+  my_theme
+
+
+# Filtering for cytoplasmic_type = 'head' and creating the boxplot
+training_mammal %>%
+  filter(cytoplasmic_type == 'head') %>%
+  ggplot(aes(x = palmitoylation, y = cys_position_from_topo_end)) +
+  geom_boxplot() +
+  labs(title = "Boxplot for Cytoplasmic Type: Head",
+       x = "Palmitoylation",
+       y = "Cys Position from Topo End") +
+  my_theme
+
+# Filtering for cytoplasmic_type = 'head'
+head_data <- training_mammal %>%
+  filter(cytoplasmic_type == 'head')
+
+# Calculating mean and median for each palmitoylation group
+mean_median_values <- head_data %>%
+  group_by(palmitoylation) %>%
+  summarise(
+    Mean = mean(cys_position_from_topo_end, na.rm = TRUE),
+    Median = median(cys_position_from_topo_end, na.rm = TRUE)
+  )
+
+# Printing the results
+print("Mean and Median values of cys_position_from_topo_end for each Palmitoylation group within Cytoplasmic Type: Head")
+print(mean_median_values)
+
+
+#####
+# Filtering for cytoplasmic_type = 'Tail' and creating the boxplot
+training_mammal %>%
+  filter(cytoplasmic_type == 'tail') %>%
+  ggplot(aes(x = palmitoylation, y = cys_position_from_topo_start)) +
+  geom_boxplot() +
+  labs(title = "Boxplot for Cytoplasmic Type: Tail",
+       x = "Palmitoylation",
+       y = "Cys Position from Topo Start") +
+  my_theme
+
+# Filtering for cytoplasmic_type = 'Tail'
+tail_data <- training_mammal %>%
+  filter(cytoplasmic_type == 'tail')
+
+# Calculating mean and median for each palmitoylation group
+mean_median_values <- tail_data %>%
+  group_by(palmitoylation) %>%
+  summarise(
+    Mean = mean(cys_position_from_topo_start, na.rm = TRUE),
+    Median = median(cys_position_from_topo_start, na.rm = TRUE)
+  )
+
+# Printing the results
+print("Mean and Median values of cys_position_from_topo_start for each Palmitoylation group within Cytoplasmic Type: Tail")
+print(mean_median_values)
+
+
+
+```
+
+## Distance for transmembrane domains
+
+```{r}
+
+## Inward TM domains - distance from topo end
+
+# Calculate mean and median for palmitoylation = no
+no_palmitoylation <- inward_data %>% filter(palmitoylation == "no")
+mean_no_palmitoylation <- mean(no_palmitoylation$cys_position_from_topo_end, na.rm = TRUE)
+median_no_palmitoylation <- median(no_palmitoylation$cys_position_from_topo_end, na.rm = TRUE)
+
+# Calculate mean and median for palmitoylation = yes
+yes_palmitoylation <- inward_data %>% filter(palmitoylation == "yes")
+mean_yes_palmitoylation <- mean(yes_palmitoylation$cys_position_from_topo_end, na.rm = TRUE)
+median_yes_palmitoylation <- median(yes_palmitoylation$cys_position_from_topo_end, na.rm = TRUE)
+
+## Outward TM domains - distance from topo start
+
+# Calculate mean and median for palmitoylation = no in outward_data
+no_palmitoylation_outward <- outward_data %>% filter(palmitoylation == "no")
+mean_no_palmitoylation_outward <- mean(no_palmitoylation_outward$cys_position_from_topo_start, na.rm = TRUE)
+median_no_palmitoylation_outward <- median(no_palmitoylation_outward$cys_position_from_topo_start, na.rm = TRUE)
+
+# Calculate mean and median for palmitoylation = yes in outward_data
+yes_palmitoylation_outward <- outward_data %>% filter(palmitoylation == "yes")
+mean_yes_palmitoylation_outward <- mean(yes_palmitoylation_outward$cys_position_from_topo_start, na.rm = TRUE)
+median_yes_palmitoylation_outward <- median(yes_palmitoylation_outward$cys_position_from_topo_start, na.rm = TRUE)
+
+## Print results
+
+# Print the results to the console
+cat("Inward - Palmitoylation = No:\n")
+cat("Mean cys_position_from_topo_end:", mean_no_palmitoylation, "\n")
+cat("Median cys_position_from_topo_end:", median_no_palmitoylation, "\n\n")
+
+cat("Inward - Palmitoylation = Yes:\n")
+cat("Mean cys_position_from_topo_end:", mean_yes_palmitoylation, "\n")
+cat("Median cys_position_from_topo_end:", median_yes_palmitoylation, "\n\n")
+
+# Print the results to the console
+cat("Outward - Palmitoylation = No:\n")
+cat("Mean cys_position_from_topo_start:", mean_no_palmitoylation_outward, "\n")
+cat("Median cys_position_from_topo_start:", median_no_palmitoylation_outward, "\n\n")
+
+cat("Outward - Palmitoylation = Yes:\n")
+cat("Mean cys_position_from_topo_start:", mean_yes_palmitoylation_outward, "\n")
+cat("Median cys_position_from_topo_start:", median_yes_palmitoylation_outward, "\n")
+
+```
+
+
+
+# Topological length for transmembrane domains comparing -/+ palmitoylation
+```{r}
+
+# Filter for inward orientation and calculate statistics
+inward_data <- training_mammal[training_mammal$orientation == 'inward', ]
+inward_stats_no <- with(inward_data[inward_data$palmitoylation == 'no', ],
+                        list(mean = mean(Topological_length, na.rm = TRUE),
+                             median = median(Topological_length, na.rm = TRUE),
+                             sd = sd(Topological_length, na.rm = TRUE)))
+inward_stats_yes <- with(inward_data[inward_data$palmitoylation == 'yes', ],
+                         list(mean = mean(Topological_length, na.rm = TRUE),
+                              median = median(Topological_length, na.rm = TRUE),
+                              sd = sd(Topological_length, na.rm = TRUE)))
+
+# Filter for outward orientation and calculate statistics
+outward_data <- training_mammal[training_mammal$orientation == 'outward', ]
+outward_stats_no <- with(outward_data[outward_data$palmitoylation == 'no', ],
+                         list(mean = mean(Topological_length, na.rm = TRUE),
+                              median = median(Topological_length, na.rm = TRUE),
+                              sd = sd(Topological_length, na.rm = TRUE)))
+outward_stats_yes <- with(outward_data[outward_data$palmitoylation == 'yes', ],
+                          list(mean = mean(Topological_length, na.rm = TRUE),
+                               median = median(Topological_length, na.rm = TRUE),
+                               sd = sd(Topological_length, na.rm = TRUE)))
+
+# Combining the results
+results <- list(Inward_No = inward_stats_no,
+                Inward_Yes = inward_stats_yes,
+                Outward_No = outward_stats_no,
+                Outward_Yes = outward_stats_yes)
+
+results
+
+
+```
+
+
+
+# Asparagine frequency in training mammal
+```{r}
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Function to calculate frequency of Asparagine (N) in each position
+calculate_n_frequency <- function(sequence, position) {
+  n_count <- sum(strsplit(sequence, "")[[1]] == "N")
+  n_frequency <- n_count / length(strsplit(sequence, "")[[1]])
+  return(data.frame(Position = position, Frequency = n_frequency))
+}
+
+# Prepare data for plotting
+plot_data <- data.frame(Position = integer(), Frequency = numeric(), Palmitoylation = character())
+
+# Analyzing window_sequence_n and window_sequence_c
+positions_n <- c(-1, -2, -3, -4, -5)
+positions_c <- c(1, 2, 3, 4, 5)
+
+# Loop over each sequence and calculate frequencies
+for (i in 1:nrow(training_mammal)) {
+  row_data <- training_mammal[i, ]
+  
+  # Process window_sequence_n
+  for (j in 1:length(positions_n)) {
+    if (nchar(row_data$window_sequence_n) >= j) {
+      temp_data <- calculate_n_frequency(substr(row_data$window_sequence_n, j, j), positions_n[j])
+      temp_data$Palmitoylation <- row_data$palmitoylation
+      plot_data <- rbind(plot_data, temp_data)
+    }
+  }
+  
+  # Process window_sequence_c
+  for (j in 1:length(positions_c)) {
+    if (nchar(row_data$window_sequence_c) >= j) {
+      temp_data <- calculate_n_frequency(substr(row_data$window_sequence_c, j, j), positions_c[j])
+      temp_data$Palmitoylation <- row_data$palmitoylation
+      plot_data <- rbind(plot_data, temp_data)
+    }
+  }
+}
+
+# Aggregate the data by Position and Palmitoylation
+plot_data_aggregated <- plot_data %>%
+  group_by(Position, Palmitoylation) %>%
+  summarize(Frequency = mean(Frequency))
+
+# Create the plot
+ggplot(plot_data_aggregated, aes(x = as.factor(Position), y = Frequency, fill = Palmitoylation)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  my_theme +
+  labs(x = "Position", y = "Frequency of Asparagine (N)", title = "Asparagine Frequency By Window Position") +
+  scale_fill_brewer(palette = "Set1")
+
+
+```
+
+
+
+## Asparagine frequency for transmembrane domains, inward vs outward
+
+```{r}
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Function to calculate frequency of Asparagine (N) in each position
+calculate_n_frequency <- function(sequence, position) {
+  n_count <- sum(strsplit(sequence, "")[[1]] == "N")
+  n_frequency <- n_count / length(strsplit(sequence, "")[[1]])
+  return(data.frame(Position = position, Frequency = n_frequency))
+}
+
+# Prepare data for plotting
+plot_data <- data.frame(Position = integer(), Frequency = numeric(), Palmitoylation = character(), Orientation = character())
+
+# Analyzing window_sequence_n and window_sequence_c
+positions_n <- c(-1, -2, -3, -4, -5)
+positions_c <- c(1, 2, 3, 4, 5)
+
+# Loop over each sequence and calculate frequencies
+for (i in 1:nrow(training_mammal)) {
+  row_data <- training_mammal[i, ]
+  
+  # Check orientation and process data accordingly
+  if (row_data$orientation %in% c("inward", "outward")) {
+    # Process window_sequence_n
+    for (j in 1:length(positions_n)) {
+      if (nchar(row_data$window_sequence_n) >= j) {
+        temp_data <- calculate_n_frequency(substr(row_data$window_sequence_n, j, j), positions_n[j])
+        temp_data$Palmitoylation <- row_data$palmitoylation
+        temp_data$Orientation <- row_data$orientation  # Include orientation in the data
+        plot_data <- rbind(plot_data, temp_data)
+      }
+    }
+    
+    # Process window_sequence_c
+    for (j in 1:length(positions_c)) {
+      if (nchar(row_data$window_sequence_c) >= j) {
+        temp_data <- calculate_n_frequency(substr(row_data$window_sequence_c, j, j), positions_c[j])
+        temp_data$Palmitoylation <- row_data$palmitoylation
+        temp_data$Orientation <- row_data$orientation  # Include orientation in the data
+        plot_data <- rbind(plot_data, temp_data)
+      }
+    }
+  }
+}
+
+# Aggregate the data by Position, Palmitoylation, and Orientation
+plot_data_aggregated <- plot_data %>%
+  group_by(Position, Palmitoylation, Orientation) %>%
+  summarize(Frequency = mean(Frequency), .groups = 'drop')
+
+# Create the plot
+ggplot(plot_data_aggregated, aes(x = as.factor(Position), y = Frequency, fill = Palmitoylation)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  facet_wrap(~ Orientation) +  # Add facets for each orientation
+  theme_minimal() +
+  labs(x = "Position", y = "Frequency of Asparagine (N)", title = "Asparagine Frequency by Window Position and Orientation") +
+  scale_fill_brewer(palette = "Set1")
+
+
+```
+
+
+
+
+## Asparagine frequency for cytoplasmic domains, head vs loop vs tail
+
+```{r}
+
+library(dplyr)
+library(ggplot2)
+
+# Function to calculate frequency of Asparagine (N) in each position
+calculate_n_frequency <- function(sequence, position) {
+  n_count <- sum(strsplit(sequence, "")[[1]] == "N")
+  n_frequency <- n_count / length(strsplit(sequence, "")[[1]])
+  return(data.frame(Position = position, Frequency = n_frequency))
+}
+
+# Prepare data for plotting
+plot_data <- data.frame(Position = integer(), Frequency = numeric(), Palmitoylation = character(), CytoplasmicType = character())
+
+# Analyzing window_sequence_n and window_sequence_c
+positions_n <- c(-1, -2, -3, -4, -5)
+positions_c <- c(1, 2, 3, 4, 5)
+
+# Loop over each sequence and calculate frequencies
+for (i in 1:nrow(training_mammal)) {
+  row_data <- training_mammal[i, ]
+  
+  # Check cytoplasmic type and process data accordingly
+  if (row_data$cytoplasmic_type %in% c("head", "loop", "tail")) {
+    # Process window_sequence_n
+    for (j in 1:length(positions_n)) {
+      if (nchar(row_data$window_sequence_n) >= j) {
+        temp_data <- calculate_n_frequency(substr(row_data$window_sequence_n, j, j), positions_n[j])
+        temp_data$Palmitoylation <- row_data$palmitoylation
+        temp_data$CytoplasmicType <- row_data$cytoplasmic_type
+        plot_data <- rbind(plot_data, temp_data)
+      }
+    }
+    
+    # Process window_sequence_c
+    for (j in 1:length(positions_c)) {
+      if (nchar(row_data$window_sequence_c) >= j) {
+        temp_data <- calculate_n_frequency(substr(row_data$window_sequence_c, j, j), positions_c[j])
+        temp_data$Palmitoylation <- row_data$palmitoylation
+        temp_data$CytoplasmicType <- row_data$cytoplasmic_type
+        plot_data <- rbind(plot_data, temp_data)
+      }
+    }
+  }
+}
+
+# Aggregate the data by Position, Palmitoylation, and CytoplasmicType
+plot_data_aggregated <- plot_data %>%
+  group_by(Position, Palmitoylation, CytoplasmicType) %>%
+  summarize(Frequency = mean(Frequency), .groups = 'drop')
+
+# Plotting function to generate a plot for a specific cytoplasmic type
+plot_cytoplasmic_type <- function(data, type) {
+  filtered_data <- filter(data, CytoplasmicType == type)
+  p <- ggplot(filtered_data, aes(x = as.factor(Position), y = Frequency, fill = Palmitoylation)) +
+    geom_bar(stat = "identity", position = position_dodge()) +
+    theme_minimal() +
+    labs(x = "Position", y = "Frequency of Asparagine (N)", title = paste("Asparagine Frequency by Window Position -", type)) +
+    scale_fill_brewer(palette = "Set1")
+  print(p)
+}
+
+# Generate plots for each type
+plot_cytoplasmic_type(plot_data_aggregated, "head")
+plot_cytoplasmic_type(plot_data_aggregated, "loop")
+plot_cytoplasmic_type(plot_data_aggregated, "tail")
+
+
+
+
+```
+
+
+
+
+## Aspartate / Glutamate frequency in training mammal
+
+```{r}
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Function to calculate combined frequency of Aspartate (D) and Glutamate (E) in each position
+calculate_de_frequency <- function(sequence, position) {
+  de_count <- sum(strsplit(sequence, "")[[1]] %in% c("D", "E"))
+  de_frequency <- de_count / length(strsplit(sequence, "")[[1]])
+  return(data.frame(Position = position, Frequency = de_frequency))
+}
+
+# Prepare data for plotting
+plot_data <- data.frame(Position = integer(), Frequency = numeric(), Palmitoylation = character())
+
+# Analyzing window_sequence_n and window_sequence_c
+positions_n <- c(-1, -2, -3, -4, -5)
+positions_c <- c(1, 2, 3, 4, 5)
+
+# Loop over each sequence and calculate frequencies
+for (i in 1:nrow(training_mammal)) {
+  row_data <- training_mammal[i, ]
+  
+  # Process window_sequence_n
+  for (j in 1:length(positions_n)) {
+    if (nchar(row_data$window_sequence_n) >= j) {
+      temp_data <- calculate_de_frequency(substr(row_data$window_sequence_n, j, j), positions_n[j])
+      temp_data$Palmitoylation <- row_data$palmitoylation
+      plot_data <- rbind(plot_data, temp_data)
+    }
+  }
+  
+  # Process window_sequence_c
+  for (j in 1:length(positions_c)) {
+    if (nchar(row_data$window_sequence_c) >= j) {
+      temp_data <- calculate_de_frequency(substr(row_data$window_sequence_c, j, j), positions_c[j])
+      temp_data$Palmitoylation <- row_data$palmitoylation
+      plot_data <- rbind(plot_data, temp_data)
+    }
+  }
+}
+
+# Aggregate the data by Position and Palmitoylation
+plot_data_aggregated <- plot_data %>%
+  group_by(Position, Palmitoylation) %>%
+  summarize(Frequency = mean(Frequency))
+
+# Create the plot
+ggplot(plot_data_aggregated, aes(x = as.factor(Position), y = Frequency, fill = Palmitoylation)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  my_theme +
+  labs(x = "Position", y = "Frequency of Aspartate/Glutamate (D/E)", title = "Aspartate/Glutamate Frequency By Window Position") +
+  scale_fill_brewer(palette = "Set1")
+
+```
+
+
+
+## Net charge box plot with values jitter'ed
+```{r}
+
+# Function to prepare data for plotting based on a specific column
+prepare_data_for_plot <- function(data, column_name, column_value) {
+  data %>% 
+    filter(get(column_name) == column_value) %>%
+    mutate(`Net Charge - Total` = window_net_charge_n + window_net_charge_c,
+           `Net Charge - Gradient` = window_net_charge_c - window_net_charge_n)
+}
+
+# Function to create a box plot with jitter
+create_box_jitter_plot <- function(data, variable_name, column_value) {
+  ggplot(data, aes(x = palmitoylation, y = get(variable_name), fill = palmitoylation)) +
+    geom_boxplot() +
+    geom_jitter(width = 0.2, size = 1, alpha = 0.5) +
+    my_theme +
+    labs(title = paste(variable_name, "for", column_value), 
+         x = "Palmitoylation Status", 
+         y = variable_name) +
+    scale_fill_brewer(palette = "Set1")
+}
+
+# Generate and store plots
+plots <- list()
+orientations <- c("inward", "outward")
+cytoplasmic_types <- c("head", "loop", "tail")
+
+for (orientation_value in orientations) {
+  orientation_data <- prepare_data_for_plot(training_mammal, "orientation", orientation_value)
+  plots[[paste0("plot_total_", orientation_value)]] <- create_box_jitter_plot(orientation_data, "Net Charge - Total", orientation_value)
+  plots[[paste0("plot_gradient_", orientation_value)]] <- create_box_jitter_plot(orientation_data, "Net Charge - Gradient", orientation_value)
+}
+
+for (cytoplasmic_type_value in cytoplasmic_types) {
+  cytoplasmic_type_data <- prepare_data_for_plot(training_mammal, "cytoplasmic_type", cytoplasmic_type_value)
+  plots[[paste0("plot_total_", cytoplasmic_type_value)]] <- create_box_jitter_plot(cytoplasmic_type_data, "Net Charge - Total", cytoplasmic_type_value)
+  plots[[paste0("plot_gradient_", cytoplasmic_type_value)]] <- create_box_jitter_plot(cytoplasmic_type_data, "Net Charge - Gradient", cytoplasmic_type_value)
+}
+
+# Display all the plots
+plot_names <- names(plots)
+for (plot_name in plot_names) {
+  print(plots[[plot_name]])
+}
+
+```
+
+
+## My jitter plot theme
+
+```{r}
+
+# Custom theme for jitter plots
+my_jitterplot_theme <- function() {
+  theme_minimal() +
+    theme(
+      legend.position = "none",           # Remove legend
+      axis.title.x = element_blank(),     # Remove x-axis title
+      # axis.text.x = element_blank(),      # Remove x-axis labels
+      # axis.title.x = element_text(size = 14), # Y-axis title font size
+      axis.text.x = element_text(size = 26),  # Y-axis label font size
+      axis.title.y = element_text(size = 22), # Y-axis title font size
+      axis.text.y = element_text(size = 26),  # Y-axis label font size
+      plot.title = element_blank(),   # Plot title font size
+      panel.spacing = unit(0.1, "lines"),     # Reduce spacing to make plot narrower
+    )
+}
+
+```
+
+
+
+
+## Net charge
+## Strip plots
+```{r}
+
+# Function to prepare data for plotting based on a specific column
+prepare_data_for_plot <- function(data, column_name, column_value) {
+  data %>% 
+    filter(get(column_name) == column_value) %>%
+    mutate(`Net Charge - Total` = window_net_charge_n + window_net_charge_c,
+           `Net Charge - Gradient` = window_net_charge_c - window_net_charge_n)
+}
+
+
+create_strip_jitter_plot <- function(data, variable_name, column_value) {
+  # Function to capitalize the first letter
+  capitalize_first_letter <- function(s) {
+    paste0(toupper(substr(s, 1, 1)), tolower(substr(s, 2, nchar(s))))
+  }
+  
+  # Determine the plot title based on column_value
+  plot_title <- ifelse(grepl("total|gradient", variable_name, ignore.case = TRUE),
+                       ifelse(column_value %in% c("inward", "outward"), 
+                              paste("Transmembrane -", capitalize_first_letter(column_value)),
+                              paste("Cytoplasmic -", capitalize_first_letter(column_value))),
+                       column_value)
+
+  ggplot(data, aes(x = palmitoylation, y = get(variable_name))) +
+    geom_jitter(aes(color = palmitoylation), width = 0.2, size = 1, alpha = 0.5) +
+    stat_summary(fun = mean, geom = "errorbar", width = 0.2, aes(ymin = ..y.., ymax = ..y..), color = "black", size = 1.5) +
+    stat_summary(fun = mean, geom = "text", aes(label = sprintf("%.2f", ..y..)), vjust = +0.4, color = "black", size = 8, hjust = +2) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    my_jitterplot_theme() +
+    labs(title = plot_title, x = "Palmitoylation Status", y = variable_name)
+}
+
+
+# Generate and store plots
+plots <- list()
+orientations <- c("inward", "outward")
+cytoplasmic_types <- c("head", "loop", "tail")
+
+for (orientation_value in orientations) {
+  orientation_data <- prepare_data_for_plot(training_mammal, "orientation", orientation_value)
+  plots[[paste0("strip_total_", orientation_value)]] <- create_strip_jitter_plot(orientation_data, "Net Charge - Total", orientation_value)
+  plots[[paste0("strip_gradient_", orientation_value)]] <- create_strip_jitter_plot(orientation_data, "Net Charge - Gradient", orientation_value)
+}
+
+for (cytoplasmic_type_value in cytoplasmic_types) {
+  cytoplasmic_type_data <- prepare_data_for_plot(training_mammal, "cytoplasmic_type", cytoplasmic_type_value)
+  plots[[paste0("strip_total_", cytoplasmic_type_value)]] <- create_strip_jitter_plot(cytoplasmic_type_data, "Net Charge - Total", cytoplasmic_type_value)
+  plots[[paste0("strip_gradient_", cytoplasmic_type_value)]] <- create_strip_jitter_plot(cytoplasmic_type_data, "Net Charge - Gradient", cytoplasmic_type_value)
+}
+
+# Display all the plots
+plot_names <- names(plots)
+for (plot_name in plot_names) {
+  print(plots[[plot_name]])
+}
+
+
+```
+
+# Cys position in topology
+```{r}
+
+## Cytoplasmic Types
+# Define a function to capitalize the first letter
+toTitleCase <- function(s) {
+  paste0(toupper(substr(s, 1, 1)), tolower(substr(s, 2, nchar(s))))
+}
+
+# Define the custom jitter plot function
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8), size = 2, alpha = 0.5) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = 0.8)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Filter and prepare the data
+cytoplasmic_type_data <- training_mammal %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Create the plot
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "relative_cys_position_topology", "Relative Cys Position Topology")
+
+
+## Inward vs Outward
+
+# Define the custom jitter plot function
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8), size = 2, alpha = 0.5) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = 0.8)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Filter and prepare the data for orientation plot
+orientation_data <- training_mammal %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Create the plot for orientation
+create_jitter_plot(orientation_data, "orientation", "relative_cys_position_topology", "Relative Cys Position Topology")
+
+
+```
+
+## Same as above but axes are flipped
+```{r}
+
+# Modified function to flip x and y axes
+create_jitter_plot <- function(data, y_var, measure, x_label) {
+  ggplot(data, aes_string(x = measure, y = y_var, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8), size = 2, alpha = 0.5) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = 0.8)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", x_label, "by", y_var), x = x_label, y = y_var) +
+    my_jitterplot_theme()
+}
+
+# For Cytoplasmic Types plot, swap the arguments accordingly
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "relative_cys_position_topology", "Relative Cys Position Topology")
+
+# For Inward vs Outward plot, swap the arguments accordingly
+create_jitter_plot(orientation_data, "orientation", "relative_cys_position_topology", "Relative Cys Position Topology")
+
+
+```
+
+## axes flipped, median values printed to console instead of on the plot
+```{r}
+
+create_jitter_plot <- function(data, y_var, measure, x_label) {
+  # Create the plot without plotting median values
+  plot <- ggplot(data, aes_string(x = measure, y = y_var, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8), size = 2, alpha = 0.5) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", x_label, "by", y_var), x = x_label, y = y_var) +
+    my_jitterplot_theme()
+
+  # Calculate and print median values to the console
+  median_values <- data %>%
+    group_by(!!as.symbol(y_var), palmitoylation) %>%
+    summarise(median_value = median(!!as.symbol(measure), na.rm = TRUE)) %>%
+    ungroup()
+
+  print(paste("Median values for", x_label, "by", y_var, ":"))
+  print(median_values)
+  
+  return(plot)
+}
+
+# Assuming 'cytoplasmic_type_data' and 'orientation_data' are already prepared as per your previous code
+# For Cytoplasmic Types plot, call the function accordingly
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "relative_cys_position_topology", "Relative Cys Position Topology")
+
+# For Inward vs Outward plot, call the function accordingly
+create_jitter_plot(orientation_data, "orientation", "relative_cys_position_topology", "Relative Cys Position Topology")
+
+
+```
+
+
+
+
+## above but now playing with colors instead of red/blue using gray/magenta
+```{r}
+
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+
+## Cytoplasmic Types
+# Function to capitalize the first letter of a string
+toTitleCase <- function(s) {
+  paste0(toupper(substr(s, 1, 1)), tolower(substr(s, 2, nchar(s))))
+}
+
+# Custom jitter plot function without median bars and with updated colors
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8), size = 2, alpha = 0.5) +
+    scale_color_manual(values = c("no" = "darkgray", "yes" = "magenta")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Data preparation (cytoplasmic_type_data and orientation_data)
+
+## Cytoplasmic Types Plot
+cytoplasmic_type_data <- training_mammal %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "relative_cys_position_topology", "Relative Cys Position Topology")
+
+## Inward vs Outward Plot
+orientation_data <- training_mammal %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+create_jitter_plot(orientation_data, "orientation", "relative_cys_position_topology", "Relative Cys Position Topology")
+
+# Modified function to flip x and y axes without median bars and with updated colors
+create_jitter_plot <- function(data, y_var, measure, x_label) {
+  ggplot(data, aes_string(x = measure, y = y_var, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8), size = 2, alpha = 0.5) +
+    scale_color_manual(values = c("no" = "darkgray", "yes" = "magenta")) +
+    labs(title = paste("Jitter Plot for", x_label, "by", y_var), x = x_label, y = y_var) +
+    my_jitterplot_theme()
+}
+
+# For Cytoplasmic Types and Inward vs Outward plots, swap the arguments accordingly
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "relative_cys_position_topology", "Relative Cys Position Topology")
+create_jitter_plot(orientation_data, "orientation", "relative_cys_position_topology", "Relative Cys Position Topology")
+
+# Axes flipped, median values printed to console instead of on the plot (No change here as median bars were not included)
+create_jitter_plot <- function(data, y_var, measure, x_label) {
+  # Create the plot without plotting median values
+  plot <- ggplot(data, aes_string(x = measure, y = y_var, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8), size = 2, alpha = 0.5) +
+    scale_color_manual(values = c("no" = "darkgray", "yes" = "magenta")) +
+    labs(title = paste("Jitter Plot for", x_label, "by", y_var), x = x_label, y = y_var) +
+    my_jitterplot_theme()
+
+  # Calculate and print median values to the console
+  median_values <- data %>%
+    group_by(!!as.symbol(y_var), palmitoylation) %>%
+    summarise(median_value = median(!!as.symbol(measure), na.rm = TRUE)) %>%
+    ungroup()
+
+  print(paste("Median values for", x_label, "by", y_var, ":"))
+  print(median_values)
+  
+  return(plot)
+}
+
+# For Cytoplasmic Types and Inward vs Outward plots, call the function with the correct parameters
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "relative_cys_position_topology", "Relative Cys Position Topology")
+create_jitter_plot(orientation_data, "orientation", "relative_cys_position_topology", "Relative Cys Position Topology")
+```
+
+
+
+
+
+
+
+
+## Cys position from topo start
+```{r}
+
+# Define a function to capitalize the first letter
+toTitleCase <- function(s) {
+  paste0(toupper(substr(s, 1, 1)), tolower(substr(s, 2, nchar(s))))
+}
+
+# Define the custom jitter plot function
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8), size = 2, alpha = 0.5) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = 0.8)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Cytoplasmic Types Plot
+cytoplasmic_type_data <- training_mammal %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Create the plot for Cytoplasmic Types
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "cys_position_from_topo_start", "Cys Position from Topo Start")
+
+# Orientation Plot
+orientation_data <- training_mammal %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Create the plot for Orientation
+create_jitter_plot(orientation_data, "orientation", "cys_position_from_topo_start", "Cys Position from Topo Start")
+
+```
+
+# Cys position from topo end
+```{r}
+
+# Define a function to capitalize the first letter
+toTitleCase <- function(s) {
+  paste0(toupper(substr(s, 1, 1)), tolower(substr(s, 2, nchar(s))))
+}
+
+# Define the custom jitter plot function
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8), size = 2, alpha = 0.5) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = 0.8)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Cytoplasmic Types Plot
+cytoplasmic_type_data <- training_mammal %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Create the plot for Cytoplasmic Types
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "cys_position_from_topo_end", "Cys Position from Topo End")
+
+# Orientation Plot
+orientation_data <- training_mammal %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Create the plot for Orientation
+create_jitter_plot(orientation_data, "orientation", "cys_position_from_topo_end", "Cys Position from Topo End")
+
+```
+
+
+
+
+
+
+
+# Window Cys Score
+```{r}
+
+# Calculate 'Cys Score - Total' and 'Cys Score - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Cys Score - Total` = window_cys_score_n + window_cys_score_c,
+         `Cys Score - Gradient` = window_cys_score_c - window_cys_score_n)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Cys Score - Total' and 'Cys Score - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Cys Score - Total`", "Cys Score - Total")
+create_jitter_plot(orientation_data, "orientation", "`Cys Score - Gradient`", "Cys Score - Gradient")
+
+# Plot for 'Cys Score - Total' and 'Cys Score - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Cys Score - Total`", "Cys Score - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Cys Score - Gradient`", "Cys Score - Gradient")
+
+```
+
+
+
+# Net Charge
+```{r}
+
+library(ggplot2)
+library(dplyr)
+library(tools)
+
+# Calculate 'Net Charge - Total' and 'Net Charge - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Net Charge - Total` = window_net_charge_n + window_net_charge_c,
+         `Net Charge - Gradient` = window_net_charge_c - window_net_charge_n)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Net Charge - Total' and 'Net Charge - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Net Charge - Total`", "Net Charge - Total")
+create_jitter_plot(orientation_data, "orientation", "`Net Charge - Gradient`", "Net Charge - Gradient")
+
+# Plot for 'Net Charge - Total' and 'Net Charge - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Net Charge - Total`", "Net Charge - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Net Charge - Gradient`", "Net Charge - Gradient")
+
+
+```
+
+# Hydrophobicity
+```{r}
+
+library(ggplot2)
+library(dplyr)
+library(tools)
+
+# Calculate 'Hydrophobicity - Total' and 'Hydrophobicity - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Hydrophobicity - Total` = window_n_hydrophobicity + window_c_hydrophobicity,
+         `Hydrophobicity - Gradient` = window_c_hydrophobicity - window_n_hydrophobicity)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.6) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 2,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "gray", "yes" = "magenta")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Hydrophobicity - Total' and 'Hydrophobicity - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Hydrophobicity - Total`", "Hydrophobicity - Total")
+create_jitter_plot(orientation_data, "orientation", "`Hydrophobicity - Gradient`", "Hydrophobicity - Gradient")
+
+# Plot for 'Hydrophobicity - Total' and 'Hydrophobicity - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Hydrophobicity - Total`", "Hydrophobicity - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Hydrophobicity - Gradient`", "Hydrophobicity - Gradient")
+
+```
+```{r}
+
+# Function to calculate and print median values
+print_median_values <- function(data, measure) {
+  median_results <- data %>%
+    group_by(orientation, cytoplasmic_type, palmitoylation) %>%
+    summarize(Median = median(.data[[measure]], na.rm = TRUE), .groups = 'drop')
+  
+  print(median_results)
+}
+
+# Print median values for 'Hydrophobicity - Total'
+cat("Median values for Hydrophobicity - Total by Orientation, Cytoplasmic Type, and Palmitoylation:\n")
+print_median_values(training_mammal_plot, "Hydrophobicity - Total")  # Use a string for the column name
+
+# Print median values for 'Hydrophobicity - Gradient'
+cat("Median values for Hydrophobicity - Gradient by Orientation, Cytoplasmic Type, and Palmitoylation:\n")
+print_median_values(training_mammal_plot, "Hydrophobicity - Gradient")  # Use a string for the column name
+
+
+```
+
+
+
+
+
+## Hydrophobicity statistics
+```{r}
+
+library(ggplot2)
+library(dplyr)
+library(tools)
+
+# Calculate 'Hydrophobicity - Total' and 'Hydrophobicity - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Hydrophobicity - Total` = window_n_hydrophobicity + window_c_hydrophobicity,
+         `Hydrophobicity - Gradient` = window_c_hydrophobicity - window_n_hydrophobicity)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Calculate and print statistics for each subgroup
+calculate_and_print_stats <- function(data, measure, group_vars) {
+  stats <- data %>%
+    group_by(across(all_of(group_vars))) %>%
+    summarize(
+      Median = median(.data[[measure]], na.rm = TRUE),
+      Mean = mean(.data[[measure]], na.rm = TRUE),
+      SD = sd(.data[[measure]], na.rm = TRUE),
+      .groups = 'drop'
+    )
+
+  print(stats)
+}
+
+# Printing statistics for each category and measure
+cat("Statistics for Hydrophobicity by Orientation and Palmitoylation:\n")
+calculate_and_print_stats(orientation_data, "Hydrophobicity - Total", c("orientation", "palmitoylation"))
+calculate_and_print_stats(orientation_data, "Hydrophobicity - Gradient", c("orientation", "palmitoylation"))
+
+cat("Statistics for Hydrophobicity by Cytoplasmic Type and Palmitoylation:\n")
+calculate_and_print_stats(cytoplasmic_type_data, "Hydrophobicity - Total", c("cytoplasmic_type", "palmitoylation"))
+calculate_and_print_stats(cytoplasmic_type_data, "Hydrophobicity - Gradient", c("cytoplasmic_type", "palmitoylation"))
+
+
+```
+
+
+
+
+
+
+
+## Hydrophilicity
+
+```{r}
+
+library(ggplot2)
+library(dplyr)
+library(tools)
+
+# Calculate 'Hydrophilicity - Total' and 'Hydrophilicity - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Hydrophilicity - Total` = window_n_hydrophilicity + window_c_hydrophilicity,
+         `Hydrophilicity - Gradient` = window_c_hydrophilicity - window_n_hydrophilicity)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Hydrophilicity - Total' and 'Hydrophilicity - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Hydrophilicity - Total`", "Hydrophilicity - Total")
+create_jitter_plot(orientation_data, "orientation", "`Hydrophilicity - Gradient`", "Hydrophilicity - Gradient")
+
+# Plot for 'Hydrophilicity - Total' and 'Hydrophilicity - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Hydrophilicity - Total`", "Hydrophilicity - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Hydrophilicity - Gradient`", "Hydrophilicity - Gradient")
+
+```
+
+## Aliphatic
+```{r}
+
+# Calculate 'Aliphatic Score - Total' and 'Aliphatic Score - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Aliphatic Score - Total` = window_aliphatic_n + window_aliphatic_c,
+         `Aliphatic Score - Gradient` = window_aliphatic_c - window_aliphatic_n)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Aliphatic Score - Total' and 'Aliphatic Score - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Aliphatic Score - Total`", "Aliphatic Score - Total")
+create_jitter_plot(orientation_data, "orientation", "`Aliphatic Score - Gradient`", "Aliphatic Score - Gradient")
+
+# Plot for 'Aliphatic Score - Total' and 'Aliphatic Score - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Aliphatic Score - Total`", "Aliphatic Score - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Aliphatic Score - Gradient`", "Aliphatic Score - Gradient")
+
+```
+
+# Aromatic
+```{r}
+
+# Calculate 'Aromatic Score - Total' and 'Aromatic Score - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Aromatic Score - Total` = window_aromatic_n + window_aromatic_c,
+         `Aromatic Score - Gradient` = window_aromatic_c - window_aromatic_n)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Aromatic Score - Total' and 'Aromatic Score - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Aromatic Score - Total`", "Aromatic Score - Total")
+create_jitter_plot(orientation_data, "orientation", "`Aromatic Score - Gradient`", "Aromatic Score - Gradient")
+
+# Plot for 'Aromatic Score - Total' and 'Aromatic Score - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Aromatic Score - Total`", "Aromatic Score - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Aromatic Score - Gradient`", "Aromatic Score - Gradient")
+
+```
+
+# Polar
+```{r}
+
+# Calculate 'Polar Score - Total' and 'Polar Score - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Polar Score - Total` = window_polar_n + window_polar_c,
+         `Polar Score - Gradient` = window_polar_c - window_polar_n)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Polar Score - Total' and 'Polar Score - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Polar Score - Total`", "Polar Score - Total")
+create_jitter_plot(orientation_data, "orientation", "`Polar Score - Gradient`", "Polar Score - Gradient")
+
+# Plot for 'Polar Score - Total' and 'Polar Score - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Polar Score - Total`", "Polar Score - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Polar Score - Gradient`", "Polar Score - Gradient")
+
+```
+
+# Transmembrane tendency
+```{r}
+
+# Calculate 'Transmembrane Tendency - Total' and 'Transmembrane Tendency - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Transmembrane Tendency - Total` = window_transmembrane_tendency_n + window_transmembrane_tendency_c,
+         `Transmembrane Tendency - Gradient` = window_transmembrane_tendency_c - window_transmembrane_tendency_n)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Transmembrane Tendency - Total' and 'Transmembrane Tendency - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Transmembrane Tendency - Total`", "Transmembrane Tendency - Total")
+create_jitter_plot(orientation_data, "orientation", "`Transmembrane Tendency - Gradient`", "Transmembrane Tendency - Gradient")
+
+# Plot for 'Transmembrane Tendency - Total' and 'Transmembrane Tendency - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Transmembrane Tendency - Total`", "Transmembrane Tendency - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Transmembrane Tendency - Gradient`", "Transmembrane Tendency - Gradient")
+
+```
+# Asparagine
+```{r}
+
+# Calculate 'Asparagine Score - Total' and 'Asparagine Score - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Asparagine Score - Total` = window_asparagine_n + window_asparagine_c,
+         `Asparagine Score - Gradient` = window_asparagine_c - window_asparagine_n)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Asparagine Score - Total' and 'Asparagine Score - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Asparagine Score - Total`", "Asparagine Score - Total")
+create_jitter_plot(orientation_data, "orientation", "`Asparagine Score - Gradient`", "Asparagine Score - Gradient")
+
+# Plot for 'Asparagine Score - Total' and 'Asparagine Score - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Asparagine Score - Total`", "Asparagine Score - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Asparagine Score - Gradient`", "Asparagine Score - Gradient")
+
+```
+
+
+# Aspartate/Glutamate
+```{r}
+
+# Calculate 'Asp Glu Score - Total' and 'Asp Glu Score - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Asp Glu Score - Total` = window_asp_glu_n + window_asp_glu_c,
+         `Asp Glu Score - Gradient` = window_asp_glu_c - window_asp_glu_n)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Asp Glu Score - Total' and 'Asp Glu Score - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Asp Glu Score - Total`", "Asp Glu Score - Total")
+create_jitter_plot(orientation_data, "orientation", "`Asp Glu Score - Gradient`", "Asp Glu Score - Gradient")
+
+# Plot for 'Asp Glu Score - Total' and 'Asp Glu Score - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Asp Glu Score - Total`", "Asp Glu Score - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Asp Glu Score - Gradient`", "Asp Glu Score - Gradient")
+
+```
+
+# Flexibility
+```{r}
+
+# Calculate 'Flexibility Score - Total' and 'Flexibility Score - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Flexibility Score - Total` = window_flexibility_n + window_flexibility_c,
+         `Flexibility Score - Gradient` = window_flexibility_c - window_flexibility_n)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Flexibility Score - Total' and 'Flexibility Score - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Flexibility Score - Total`", "Flexibility Score - Total")
+create_jitter_plot(orientation_data, "orientation", "`Flexibility Score - Gradient`", "Flexibility Score - Gradient")
+
+# Plot for 'Flexibility Score - Total' and 'Flexibility Score - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Flexibility Score - Total`", "Flexibility Score - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Flexibility Score - Gradient`", "Flexibility Score - Gradient")
+
+```
+
+
+
+# Bulkiness
+```{r}
+
+# Calculate 'Bulkiness Score - Total' and 'Bulkiness Score - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Bulkiness Score - Total` = window_bulkiness_n + window_bulkiness_c,
+         `Bulkiness Score - Gradient` = window_bulkiness_c - window_bulkiness_n)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Bulkiness Score - Total' and 'Bulkiness Score - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Bulkiness Score - Total`", "Bulkiness Score - Total")
+create_jitter_plot(orientation_data, "orientation", "`Bulkiness Score - Gradient`", "Bulkiness Score - Gradient")
+
+# Plot for 'Bulkiness Score - Total' and 'Bulkiness Score - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Bulkiness Score - Total`", "Bulkiness Score - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Bulkiness Score - Gradient`", "Bulkiness Score - Gradient")
+
+```
+
+# Buried
+```{r}
+
+# Calculate 'Buried Score - Total' and 'Buried Score - Gradient' without altering the original dataframe
+training_mammal_plot <- training_mammal %>%
+  mutate(`Buried Score - Total` = window_buried_n + window_buried_c,
+         `Buried Score - Gradient` = window_buried_c - window_buried_n)
+
+# Filter data for orientation plot (only inward and outward) and set factor levels with capitalized first letters
+orientation_data <- training_mammal_plot %>%
+  filter(orientation %in% c("inward", "outward")) %>%
+  mutate(orientation = factor(toTitleCase(as.character(orientation)), levels = c("Inward", "Outward")))
+
+# Filter data for cytoplasmic_type plot (only head, loop, tail) and set factor levels with capitalized first letters
+cytoplasmic_type_data <- training_mammal_plot %>%
+  filter(cytoplasmic_type %in% c("head", "loop", "tail")) %>%
+  mutate(cytoplasmic_type = factor(toTitleCase(as.character(cytoplasmic_type)), levels = c("Head", "Loop", "Tail")))
+
+# Define dodging width
+dodge_width <- 0.8
+
+# Function to create jitter plots with mean lines correctly aligned with each palmitoylation group
+create_jitter_plot <- function(data, x_var, measure, y_label) {
+  ggplot(data, aes_string(x = x_var, y = measure, color = "palmitoylation", group = "palmitoylation")) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = dodge_width), size = 2, alpha = 0.3) +
+    stat_summary(fun = mean, geom = "crossbar", width = 0.6, color = "black", fatten = 4,
+                 position = position_dodge(width = dodge_width)) +
+    scale_color_manual(values = c("no" = "red", "yes" = "blue")) +
+    labs(title = paste("Jitter Plot for", y_label, "by", x_var), x = x_var, y = y_label) +
+    my_jitterplot_theme()
+}
+
+# Plot for 'Buried Score - Total' and 'Buried Score - Gradient' by orientation
+create_jitter_plot(orientation_data, "orientation", "`Buried Score - Total`", "Buried Score - Total")
+create_jitter_plot(orientation_data, "orientation", "`Buried Score - Gradient`", "Buried Score - Gradient")
+
+# Plot for 'Buried Score - Total' and 'Buried Score - Gradient' by cytoplasmic_type
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Buried Score - Total`", "Buried Score - Total")
+create_jitter_plot(cytoplasmic_type_data, "cytoplasmic_type", "`Buried Score - Gradient`", "Buried Score - Gradient")
+
+```
+
+
+
+# Net charge in density plots
+# Same as above
+```{r}
+
+# Function to prepare data for plotting based on a specific column
+prepare_data_for_plot <- function(data, column_name, column_value) {
+  data %>% 
+    filter(get(column_name) == column_value) %>%
+    mutate(`Net Charge - Total` = window_net_charge_n + window_net_charge_c,
+           `Net Charge - Gradient` = window_net_charge_c - window_net_charge_n)
+}
+
+# Function to create a density plot
+create_density_plot <- function(data, variable_name, column_value) {
+  ggplot(data, aes(x = get(variable_name), fill = palmitoylation)) +
+    geom_density(alpha = 0.5) +
+    my_theme +
+    labs(title = paste("Density Plot of", variable_name, "for", column_value), 
+         x = variable_name, 
+         y = "Density") +
+    scale_fill_brewer(palette = "Set1")
+}
+
+# Generate and store plots
+plots <- list()
+orientations <- c("inward", "outward")
+cytoplasmic_types <- c("head", "loop", "tail")
+
+for (orientation_value in orientations) {
+  orientation_data <- prepare_data_for_plot(training_mammal, "orientation", orientation_value)
+  plots[[paste0("density_total_", orientation_value)]] <- create_density_plot(orientation_data, "Net Charge - Total", orientation_value)
+  plots[[paste0("density_gradient_", orientation_value)]] <- create_density_plot(orientation_data, "Net Charge - Gradient", orientation_value)
+}
+
+for (cytoplasmic_type_value in cytoplasmic_types) {
+  cytoplasmic_type_data <- prepare_data_for_plot(training_mammal, "cytoplasmic_type", cytoplasmic_type_value)
+  plots[[paste0("density_total_", cytoplasmic_type_value)]] <- create_density_plot(cytoplasmic_type_data, "Net Charge - Total", cytoplasmic_type_value)
+  plots[[paste0("density_gradient_", cytoplasmic_type_value)]] <- create_density_plot(cytoplasmic_type_data, "Net Charge - Gradient", cytoplasmic_type_value)
+}
+
+# Display all the plots
+plot_names <- names(plots)
+for (plot_name in plot_names) {
+  print(plots[[plot_name]])
+}
+
+```
+
+
+
+
+
+
+
+
+## topological length
+```{r}
+
+library(ggplot2)
+
+# Function to calculate mean and sd
+calculate_stats <- function(data, column) {
+  mean_value <- mean(data[[column]], na.rm = TRUE)
+  sd_value <- sd(data[[column]], na.rm = TRUE)
+  return(c(mean = mean_value, sd = sd_value))
+}
+
+# Function to process each dataframe
+process_dataframe_for_topological_length <- function(df, dataset_name) {
+  df_yes <- subset(df, palmitoylation == "yes")
+  df_no <- subset(df, palmitoylation == "no")
+
+  stats_yes <- calculate_stats(df_yes, "Topological_length")
+  stats_no <- calculate_stats(df_no, "Topological_length")
+
+  return(data.frame(
+    Palmitoylation = c('No', 'Yes'),
+    Mean = c(stats_no['mean'], stats_yes['mean']),
+    SD = c(stats_no['sd'], stats_yes['sd']),
+    Dataset = rep(dataset_name, 2)
+  ))
+}
+
+# Process each dataframe
+stats_training_mammal <- process_dataframe_for_topological_length(training_mammal, 'Training Mammal')
+stats_holdout_mammal <- process_dataframe_for_topological_length(holdout_mammal, 'Holdout Mammal')
+stats_viet_uniprot_swisspalm <- process_dataframe_for_topological_length(viet_uniprot_swisspalm, 'Viet Uniprot Swisspalm')
+
+# Combine the data
+combined_stats <- rbind(stats_training_mammal, stats_holdout_mammal, stats_viet_uniprot_swisspalm)
+
+# Plotting
+ggplot(combined_stats, aes(x = Palmitoylation, y = Mean, fill = Dataset)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD), width = 0.2, position = position_dodge(0.9)) +
+  labs(title = "Topological Length by Palmitoylation Status", x = "Palmitoylation Status", y = "Mean Topological Length") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+
+# window cys score
+```{r}
+
+library(ggplot2)
+
+# Function to calculate mean and sd
+calculate_stats <- function(data, column) {
+  mean_value <- mean(data[[column]], na.rm = TRUE)
+  sd_value <- sd(data[[column]], na.rm = TRUE)
+  return(c(mean = mean_value, sd = sd_value))
+}
+
+# Function to process each dataframe
+process_dataframe_for_cys_score <- function(df, dataset_name) {
+  df_yes <- subset(df, palmitoylation == "yes")
+  df_no <- subset(df, palmitoylation == "no")
+
+  stats_yes_n <- calculate_stats(df_yes, "window_cys_score_n")
+  stats_yes_c <- calculate_stats(df_yes, "window_cys_score_c")
+
+  stats_no_n <- calculate_stats(df_no, "window_cys_score_n")
+  stats_no_c <- calculate_stats(df_no, "window_cys_score_c")
+
+  return(data.frame(
+    Condition = c('No - N', 'Yes - N', 'No - C', 'Yes - C'),
+    Mean = c(stats_no_n['mean'], stats_yes_n['mean'], stats_no_c['mean'], stats_yes_c['mean']),
+    SD = c(stats_no_n['sd'], stats_yes_n['sd'], stats_no_c['sd'], stats_yes_c['sd']),
+    Dataset = rep(dataset_name, 4)
+  ))
+}
+
+# Process each dataframe
+stats_training_mammal <- process_dataframe_for_cys_score(training_mammal, 'Training Mammal')
+stats_holdout_mammal <- process_dataframe_for_cys_score(holdout_mammal, 'Holdout Mammal')
+stats_viet_uniprot_swisspalm <- process_dataframe_for_cys_score(viet_uniprot_swisspalm, 'Viet Uniprot Swisspalm')
+
+# Combine the data
+combined_stats <- rbind(stats_training_mammal, stats_holdout_mammal, stats_viet_uniprot_swisspalm)
+
+# Plotting
+ggplot(combined_stats, aes(x = Condition, y = Mean, fill = Dataset)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD), width = 0.2, position = position_dodge(0.9)) +
+  labs(title = "Window Cys Score by Palmitoylation Status", x = "Condition", y = "Mean Score") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plotting
+ggplot(combined_stats, aes(x = Condition, y = Mean, fill = Dataset)) +
+  geom_boxplot(position = position_dodge(0.9)) +
+  labs(title = "Window Cys Score by Palmitoylation Status", x = "Condition", y = "Mean Score") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+## With mean values printed
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Function to calculate only the mean
+calculate_mean <- function(data, column) {
+  mean_value <- mean(data[[column]], na.rm = TRUE)
+  return(mean_value)
+}
+
+# Function to process the dataframe for mean cys_score by palmitoylation status
+process_dataframe_for_cys_score <- function(df) {
+  df_yes <- subset(df, palmitoylation == "yes")
+  df_no <- subset(df, palmitoylation == "no")
+
+  mean_yes_n <- calculate_mean(df_yes, "window_cys_score_n")
+  mean_yes_c <- calculate_mean(df_yes, "window_cys_score_c")
+  mean_no_n <- calculate_mean(df_no, "window_cys_score_n")
+  mean_no_c <- calculate_mean(df_no, "window_cys_score_c")
+
+  return(data.frame(
+    Condition = c('No - N', 'Yes - N', 'No - C', 'Yes - C'),
+    Mean = c(mean_no_n, mean_yes_n, mean_no_c, mean_yes_c)
+  ))
+}
+
+# Process the training_mammal dataframe
+stats_training_mammal <- process_dataframe_for_cys_score(training_mammal)
+
+# Print the means to the console
+print("Mean values for Cys Scores by Palmitoylation Status in Training Mammal:")
+print(stats_training_mammal)
+
+# Plotting
+ggplot(stats_training_mammal, aes(x = Condition, y = Mean, fill = Condition)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  labs(title = "Mean Window Cys Score by Palmitoylation Status", x = "Condition", y = "Mean Score") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+## Now add up the N and C terminal scores for the entire window sequence of Cys score
+
+```{r}
+
+library(ggplot2)
+library(dplyr)
+
+# Function to calculate only the mean
+calculate_mean <- function(data, column) {
+  mean_value <- mean(data[[column]], na.rm = TRUE)
+  return(mean_value)
+}
+
+# Function to process the dataframe and sum cys_score by palmitoylation status
+process_dataframe_for_cys_score <- function(df) {
+  df_yes <- subset(df, palmitoylation == "yes")
+  df_no <- subset(df, palmitoylation == "no")
+
+  # Calculate means for each condition
+  mean_yes_n <- calculate_mean(df_yes, "window_cys_score_n")
+  mean_yes_c <- calculate_mean(df_yes, "window_cys_score_c")
+  mean_no_n <- calculate_mean(df_no, "window_cys_score_n")
+  mean_no_c <- calculate_mean(df_no, "window_cys_score_c")
+
+  # Sum the means for the 'N' and 'C' conditions for each palmitoylation status
+  total_mean_yes <- mean_yes_n + mean_yes_c
+  total_mean_no <- mean_no_n + mean_no_c
+
+  return(data.frame(
+    Condition = c('No', 'Yes'),
+    Mean = c(total_mean_no, total_mean_yes)
+  ))
+}
+
+# Process the training_mammal dataframe
+stats_training_mammal <- process_dataframe_for_cys_score(training_mammal)
+
+# Print the combined means to the console
+print("Combined Mean values for Cys Scores by Palmitoylation Status in Training Mammal:")
+print(stats_training_mammal)
+
+# Plotting
+ggplot(stats_training_mammal, aes(x = Condition, y = Mean, fill = Condition)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  labs(title = "Combined Mean Window Cys Score by Palmitoylation Status", x = "Palmitoylation Status", y = "Mean Score") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+## with SD and SEM
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Function to calculate mean, SEM, and SD
+calculate_stats <- function(data, column) {
+  mean_value <- mean(data[[column]], na.rm = TRUE)
+  n <- sum(!is.na(data[[column]]))  # number of non-NA observations
+  sd_value <- sd(data[[column]], na.rm = TRUE)
+  sem_value <- sd_value / sqrt(n)  # Calculate SEM
+  return(list(mean = mean_value, sd = sd_value, sem = sem_value))
+}
+
+# Function to process the dataframe and sum cys_score by palmitoylation status
+process_dataframe_for_cys_score <- function(df) {
+  df_yes <- subset(df, palmitoylation == "yes")
+  df_no <- subset(df, palmitoylation == "no")
+
+  # Calculate stats for each condition
+  stats_yes_n <- calculate_stats(df_yes, "window_cys_score_n")
+  stats_yes_c <- calculate_stats(df_yes, "window_cys_score_c")
+  stats_no_n <- calculate_stats(df_no, "window_cys_score_n")
+  stats_no_c <- calculate_stats(df_no, "window_cys_score_c")
+
+  # Sum the means and calculate combined SEM
+  total_mean_yes <- stats_yes_n$mean + stats_yes_c$mean
+  total_mean_no <- stats_no_n$mean + stats_no_c$mean
+  total_sem_yes <- sqrt(stats_yes_n$sem^2 + stats_yes_c$sem^2)  # Combine SEMs for independent samples
+  total_sem_no <- sqrt(stats_no_n$sem^2 + stats_no_c$sem^2)  # Combine SEMs for independent samples
+  total_sd_yes <- sqrt(stats_yes_n$sd^2 + stats_yes_c$sd^2)  # Combine SDs for independent samples
+  total_sd_no <- sqrt(stats_no_n$sd^2 + stats_no_c$sd^2)  # Combine SDs for independent samples
+
+  return(data.frame(
+    Condition = c('No', 'Yes'),
+    Mean = c(total_mean_no, total_mean_yes),
+    SD = c(total_sd_no, total_sd_yes),
+    SEM = c(total_sem_no, total_sem_yes)
+  ))
+}
+
+# Process the training_mammal dataframe
+stats_training_mammal <- process_dataframe_for_cys_score(training_mammal)
+
+# Print the combined means, SEMs, and SDs to the console
+print("Combined Mean, SD, and SEM values for Cys Scores by Palmitoylation Status in Training Mammal:")
+print(stats_training_mammal)
+
+# Plotting only with mean values
+ggplot(stats_training_mammal, aes(x = Condition, y = Mean, fill = Condition)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  labs(title = "Combined Mean Window Cys Score by Palmitoylation Status", x = "Palmitoylation Status", y = "Mean Score") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+## Window Cys score
+```{r}
+
+library(dplyr)
+library(ggplot2)
+
+# Function to process the dataframe and sum Cys scores by palmitoylation status and topological location
+process_dataframe_for_combined_cys_score <- function(df, location) {
+  # Filter the dataframe based on the topological location
+  df <- df %>% filter(Topological_location == location)
+  
+  # Split data into 'yes' and 'no' for palmitoylation
+  df_yes <- df %>% filter(palmitoylation == "yes")
+  df_no <- df %>% filter(palmitoylation == "no")
+
+  # Sum and then calculate the mean Cys scores for 'yes' and 'no' palmitoylation status
+  total_mean_yes <- mean(df_yes$window_cys_score_n + df_yes$window_cys_score_c, na.rm = TRUE)
+  total_mean_no <- mean(df_no$window_cys_score_n + df_no$window_cys_score_c, na.rm = TRUE)
+
+  return(data.frame(
+    Condition = c('No', 'Yes'),
+    Mean = c(total_mean_no, total_mean_yes),
+    Topology = rep(location, 2)
+  ))
+}
+
+# Process the training_mammal dataframe for each topological condition
+stats_cytoplasmic <- process_dataframe_for_combined_cys_score(training_mammal, 'Cytoplasmic')
+stats_transmembrane <- process_dataframe_for_combined_cys_score(training_mammal, 'Transmembrane')
+
+# Combine the results
+combined_stats <- rbind(stats_cytoplasmic, stats_transmembrane)
+
+# Print the combined means to the console
+print("Combined Mean values for Cys Scores by Palmitoylation Status:")
+print(combined_stats)
+
+```
+
+
+
+
+
+## same as above but with asparagine
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Function to calculate mean, SEM, and SD
+calculate_stats <- function(data, column) {
+  mean_value <- mean(data[[column]], na.rm = TRUE)
+  n <- sum(!is.na(data[[column]]))  # number of non-NA observations
+  sd_value <- sd(data[[column]], na.rm = TRUE)
+  sem_value <- sd_value / sqrt(n)  # Calculate SEM
+  return(list(mean = mean_value, sd = sd_value, sem = sem_value))
+}
+
+# Function to process the dataframe and sum asparagine scores by palmitoylation status
+process_dataframe_for_asparagine_score <- function(df) {
+  df_yes <- subset(df, palmitoylation == "yes")
+  df_no <- subset(df, palmitoylation == "no")
+
+  # Calculate stats for each condition
+  stats_yes_n <- calculate_stats(df_yes, "window_asparagine_n")
+  stats_yes_c <- calculate_stats(df_yes, "window_asparagine_c")
+  stats_no_n <- calculate_stats(df_no, "window_asparagine_n")
+  stats_no_c <- calculate_stats(df_no, "window_asparagine_c")
+
+  # Sum the means and calculate combined SEM
+  total_mean_yes <- stats_yes_n$mean + stats_yes_c$mean
+  total_mean_no <- stats_no_n$mean + stats_no_c$mean
+  total_sem_yes <- sqrt(stats_yes_n$sem^2 + stats_yes_c$sem^2)  # Combine SEMs for independent samples
+  total_sem_no <- sqrt(stats_no_n$sem^2 + stats_no_c$sem^2)  # Combine SEMs for independent samples
+  total_sd_yes <- sqrt(stats_yes_n$sd^2 + stats_yes_c$sd^2)  # Combine SDs for independent samples
+  total_sd_no <- sqrt(stats_no_n$sd^2 + stats_no_c$sd^2)  # Combine SDs for independent samples
+
+  return(data.frame(
+    Condition = c('No', 'Yes'),
+    Mean = c(total_mean_no, total_mean_yes),
+    SD = c(total_sd_no, total_sd_yes),
+    SEM = c(total_sem_no, total_sem_yes)
+  ))
+}
+
+# Process the training_mammal dataframe
+stats_training_mammal <- process_dataframe_for_asparagine_score(training_mammal)
+
+# Print the combined means, SEMs, and SDs to the console
+print("Combined Mean, SD, and SEM values for Asparagine Scores by Palmitoylation Status in Training Mammal:")
+print(stats_training_mammal)
+
+# Plotting only with mean values
+ggplot(stats_training_mammal, aes(x = Condition, y = Mean, fill = Condition)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  labs(title = "Combined Mean Window Asparagine Score by Palmitoylation Status", x = "Palmitoylation Status", y = "Mean Score") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+
+## same as above, asparagine score but now split up by window n vs window c
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Function to calculate mean, SEM, and SD
+calculate_stats <- function(data, column) {
+  mean_value <- mean(data[[column]], na.rm = TRUE)
+  n <- sum(!is.na(data[[column]]))  # number of non-NA observations
+  sd_value <- sd(data[[column]], na.rm = TRUE)
+  sem_value <- sd_value / sqrt(n)  # Calculate SEM
+  return(list(mean = mean_value, sd = sd_value, sem = sem_value))
+}
+
+# Function to process the dataframe for asparagine scores by type and palmitoylation status
+process_dataframe_for_asparagine_score <- function(df) {
+  df_yes <- subset(df, palmitoylation == "yes")
+  df_no <- subset(df, palmitoylation == "no")
+
+  # Calculate stats for each condition
+  stats_yes_n <- calculate_stats(df_yes, "window_asparagine_n")
+  stats_yes_c <- calculate_stats(df_yes, "window_asparagine_c")
+  stats_no_n <- calculate_stats(df_no, "window_asparagine_n")
+  stats_no_c <- calculate_stats(df_no, "window_asparagine_c")
+
+  # Prepare the data frame without summing up the values
+  data <- data.frame(
+    Condition = c('No - N', 'Yes - N', 'No - C', 'Yes - C'),
+    Mean = c(stats_no_n$mean, stats_yes_n$mean, stats_no_c$mean, stats_yes_c$mean),
+    SD = c(stats_no_n$sd, stats_yes_n$sd, stats_no_c$sd, stats_yes_c$sd),
+    SEM = c(stats_no_n$sem, stats_yes_n$sem, stats_no_c$sem, stats_yes_c$sem)
+  )
+  return(data)
+}
+
+# Process the training_mammal dataframe
+stats_training_mammal <- process_dataframe_for_asparagine_score(training_mammal)
+
+# Print the means, SEMs, and SDs to the console
+print("Mean, SD, and SEM values for Asparagine Scores by Window Type and Palmitoylation Status in Training Mammal:")
+print(stats_training_mammal)
+
+# Plotting each type separately
+ggplot(stats_training_mammal, aes(x = Condition, y = Mean, fill = Condition)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  labs(title = "Mean Window Asparagine Score by Type and Palmitoylation Status", x = "Type and Palmitoylation Status", y = "Mean Score") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+# Asn score for Transmembrane vs Cytoplasmic separately
+```{r}
+
+library(ggplot2)
+library(dplyr)
+
+# Function to calculate mean, SEM, and SD
+calculate_stats <- function(data, column) {
+  mean_value <- mean(data[[column]], na.rm = TRUE)
+  n <- sum(!is.na(data[[column]]))  # number of non-NA observations
+  sd_value <- sd(data[[column]], na.rm = TRUE)
+  sem_value <- sd_value / sqrt(n)  # Calculate SEM
+  return(list(mean = mean_value, sd = sd_value, sem = sem_value))
+}
+
+# Function to process the dataframe and sum asparagine scores by palmitoylation status for specified topological locations
+process_dataframe_for_asparagine_score <- function(df, location) {
+  # Filter by topological location
+  df <- df %>% filter(Topological_location == location)
+  
+  df_yes <- df %>% filter(palmitoylation == "yes")
+  df_no <- df %>% filter(palmitoylation == "no")
+
+  # Calculate stats for each condition
+  stats_yes_n <- calculate_stats(df_yes, "window_asparagine_n")
+  stats_yes_c <- calculate_stats(df_yes, "window_asparagine_c")
+  stats_no_n <- calculate_stats(df_no, "window_asparagine_n")
+  stats_no_c <- calculate_stats(df_no, "window_asparagine_c")
+
+  # Sum the means and calculate combined SEM and SD
+  total_mean_yes <- stats_yes_n$mean + stats_yes_c$mean
+  total_mean_no <- stats_no_n$mean + stats_no_c$mean
+  total_sem_yes <- sqrt(stats_yes_n$sem^2 + stats_yes_c$sem^2)  # Combine SEMs for independent samples
+  total_sem_no <- sqrt(stats_no_n$sem^2 + stats_no_c$sem^2)
+  total_sd_yes <- sqrt(stats_yes_n$sd^2 + stats_yes_c$sd^2)  # Combine SDs for independent samples
+  total_sd_no <- sqrt(stats_no_n$sd^2 + stats_no_c$sd^2)
+
+  return(data.frame(
+    Condition = c('No', 'Yes'),
+    Mean = c(total_mean_no, total_mean_yes),
+    SD = c(total_sd_no, total_sd_yes),
+    SEM = c(total_sem_no, total_sem_yes),
+    Topology = rep(location, 2)
+  ))
+}
+
+# Process the training_mammal dataframe for each topological condition
+stats_cytoplasmic <- process_dataframe_for_asparagine_score(training_mammal, 'Cytoplasmic')
+stats_transmembrane <- process_dataframe_for_asparagine_score(training_mammal, 'Transmembrane')
+
+# Combine the results
+combined_stats <- rbind(stats_cytoplasmic, stats_transmembrane)
+
+# Print the combined means, SEMs, and SDs to the console
+print("Combined Mean, SD, and SEM values for Asparagine Scores by Palmitoylation Status:")
+print(combined_stats)
+
+
+```
+
+
+
+# buried
+```{r}
+
+library(ggplot2)
+
+# Function to calculate mean, median, and sd
+calculate_stats <- function(data, column) {
+  mean_value <- mean(data[[column]], na.rm = TRUE)
+  median_value <- median(data[[column]], na.rm = TRUE)
+  sd_value <- sd(data[[column]], na.rm = TRUE)
+  return(c(mean = mean_value, median = median_value, sd = sd_value))
+}
+
+# Function to process each dataframe
+process_dataframe_for_buried <- function(df, dataset_name) {
+  df_yes <- subset(df, palmitoylation == "yes")
+  df_no <- subset(df, palmitoylation == "no")
+
+  stats_yes_n <- calculate_stats(df_yes, "window_buried_n")
+  stats_yes_c <- calculate_stats(df_yes, "window_buried_c")
+
+  stats_no_n <- calculate_stats(df_no, "window_buried_n")
+  stats_no_c <- calculate_stats(df_no, "window_buried_c")
+
+  return(data.frame(
+    Condition = c('No - N', 'Yes - N', 'No - C', 'Yes - C'),
+    Mean = c(stats_no_n['mean'], stats_yes_n['mean'], stats_no_c['mean'], stats_yes_c['mean']),
+    SD = c(stats_no_n['sd'], stats_yes_n['sd'], stats_no_c['sd'], stats_yes_c['sd']),
+    Dataset = rep(dataset_name, 4)
+  ))
+}
+
+# Process each dataframe
+stats_training_mammal <- process_dataframe_for_buried(training_mammal, 'Training Mammal')
+stats_holdout_mammal <- process_dataframe_for_buried(holdout_mammal, 'Holdout Mammal')
+stats_viet_uniprot_swisspalm <- process_dataframe_for_buried(viet_uniprot_swisspalm, 'Viet Uniprot Swisspalm')
+
+# Combine the data
+combined_stats <- rbind(stats_training_mammal, stats_holdout_mammal, stats_viet_uniprot_swisspalm)
+
+# Plotting
+ggplot(combined_stats, aes(x = Condition, y = Mean, fill = Dataset)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD), width = 0.2, position = position_dodge(0.9)) +
+  labs(title = "Window Buried Scores by Palmitoylation Status", x = "Condition", y = "Mean Score") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+# Bulkiness
+```{r}
+
+# Function to calculate mean, median, and sd
+calculate_stats <- function(data, column) {
+  mean_value <- mean(data[[column]], na.rm = TRUE)
+  median_value <- median(data[[column]], na.rm = TRUE)
+  sd_value <- sd(data[[column]], na.rm = TRUE)
+  return(c(mean = mean_value, median = median_value, sd = sd_value))
+}
+
+# Function to process each dataframe
+process_dataframe_for_bulkiness <- function(df, dataset_name) {
+  df_yes <- subset(df, palmitoylation == "yes")
+  df_no <- subset(df, palmitoylation == "no")
+
+  stats_yes_n <- calculate_stats(df_yes, "window_bulkiness_n")
+  stats_yes_c <- calculate_stats(df_yes, "window_bulkiness_c")
+
+  stats_no_n <- calculate_stats(df_no, "window_bulkiness_n")
+  stats_no_c <- calculate_stats(df_no, "window_bulkiness_c")
+
+  return(data.frame(
+    Condition = c('No - N', 'Yes - N', 'No - C', 'Yes - C'),
+    Mean = c(stats_no_n['mean'], stats_yes_n['mean'], stats_no_c['mean'], stats_yes_c['mean']),
+    SD = c(stats_no_n['sd'], stats_yes_n['sd'], stats_no_c['sd'], stats_yes_c['sd']),
+    Dataset = rep(dataset_name, 4)
+  ))
+}
+
+# Process each dataframe
+stats_training_mammal <- process_dataframe_for_bulkiness(training_mammal, 'Training Mammal')
+stats_holdout_mammal <- process_dataframe_for_bulkiness(holdout_mammal, 'Holdout Mammal')
+stats_viet_uniprot_swisspalm <- process_dataframe_for_bulkiness(viet_uniprot_swisspalm, 'Viet Uniprot Swisspalm')
+
+# Combine the data
+combined_stats <- rbind(stats_training_mammal, stats_holdout_mammal, stats_viet_uniprot_swisspalm)
+
+# Plotting
+ggplot(combined_stats, aes(x = Condition, y = Mean, fill = Dataset)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD), width = 0.2, position = position_dodge(0.9)) +
+  labs(title = "Window Bulkiness Scores by Palmitoylation Status", x = "Condition", y = "Mean Score") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+# Flexibility
+```{r}
+
+# Function to calculate mean and sd
+calculate_stats <- function(data, column) {
+  mean_value <- mean(data[[column]], na.rm = TRUE)
+  sd_value <- sd(data[[column]], na.rm = TRUE)
+  return(c(mean = mean_value, sd = sd_value))
+}
+
+# Function to process each dataframe
+process_dataframe_for_flexibility <- function(df, dataset_name) {
+  df_yes <- subset(df, palmitoylation == "yes")
+  df_no <- subset(df, palmitoylation == "no")
+
+  stats_yes_n <- calculate_stats(df_yes, "window_flexibility_n")
+  stats_yes_c <- calculate_stats(df_yes, "window_flexibility_c")
+
+  stats_no_n <- calculate_stats(df_no, "window_flexibility_n")
+  stats_no_c <- calculate_stats(df_no, "window_flexibility_c")
+
+  return(data.frame(
+    Condition = c('No - N', 'Yes - N', 'No - C', 'Yes - C'),
+    Mean = c(stats_no_n['mean'], stats_yes_n['mean'], stats_no_c['mean'], stats_yes_c['mean']),
+    SD = c(stats_no_n['sd'], stats_yes_n['sd'], stats_no_c['sd'], stats_yes_c['sd']),
+    Dataset = rep(dataset_name, 4)
+  ))
+}
+
+# Process each dataframe
+stats_training_mammal <- process_dataframe_for_flexibility(training_mammal, 'Training Mammal')
+stats_holdout_mammal <- process_dataframe_for_flexibility(holdout_mammal, 'Holdout Mammal')
+stats_viet_uniprot_swisspalm <- process_dataframe_for_flexibility(viet_uniprot_swisspalm, 'Viet Uniprot Swisspalm')
+
+# Combine the data
+combined_stats <- rbind(stats_training_mammal, stats_holdout_mammal, stats_viet_uniprot_swisspalm)
+
+# Plotting
+ggplot(combined_stats, aes(x = Condition, y = Mean, fill = Dataset)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD), width = 0.2, position = position_dodge(0.9)) +
+  labs(title = "Window Flexibility Scores by Palmitoylation Status", x = "Condition", y = "Mean Score") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+
+
+## Asparagine score
+```{r}
+
+# Function to calculate mean and sd
+calculate_stats <- function(data, column) {
+  mean_value <- mean(data[[column]], na.rm = TRUE)
+  sd_value <- sd(data[[column]], na.rm = TRUE)
+  return(c(mean = mean_value, sd = sd_value))
+}
+
+# Function to process each dataframe for asparagine stats
+process_dataframe_for_asparagine <- function(df, dataset_name) {
+  df_yes <- subset(df, palmitoylation == "yes")
+  df_no <- subset(df, palmitoylation == "no")
+
+  stats_yes_n <- calculate_stats(df_yes, "window_asparagine_n")
+  stats_yes_c <- calculate_stats(df_yes, "window_asparagine_c")
+
+  stats_no_n <- calculate_stats(df_no, "window_asparagine_n")
+  stats_no_c <- calculate_stats(df_no, "window_asparagine_c")
+
+  return(data.frame(
+    Condition = c('No - N', 'Yes - N', 'No - C', 'Yes - C'),
+    Mean = c(stats_no_n['mean'], stats_yes_n['mean'], stats_no_c['mean'], stats_yes_c['mean']),
+    SD = c(stats_no_n['sd'], stats_yes_n['sd'], stats_no_c['sd'], stats_yes_c['sd']),
+    Dataset = rep(dataset_name, 4)
+  ))
+}
+
+# Process each dataframe
+stats_training_mammal <- process_dataframe_for_asparagine(training_mammal, 'Training Mammal')
+stats_holdout_mammal <- process_dataframe_for_asparagine(holdout_mammal, 'Holdout Mammal')
+stats_viet_uniprot_swisspalm <- process_dataframe_for_asparagine(viet_uniprot_swisspalm, 'Viet Uniprot Swisspalm')
+
+# Combine the data
+combined_stats <- rbind(stats_training_mammal, stats_holdout_mammal, stats_viet_uniprot_swisspalm)
+
+# Plotting
+ggplot(combined_stats, aes(x = Condition, y = Mean, fill = Dataset)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  geom_errorbar(aes(ymin = Mean - SD, ymax = Mean + SD), width = 0.2, position = position_dodge(0.9)) +
+  labs(title = "Window Asparagine Scores by Palmitoylation Status", x = "Condition", y = "Mean Score") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+######
+
+# Process each dataframe
+stats_training_mammal <- process_dataframe_for_asparagine(training_mammal, 'Training Mammal')
+stats_holdout_mammal <- process_dataframe_for_asparagine(holdout_mammal, 'Holdout Mammal')
+stats_viet_uniprot_swisspalm <- process_dataframe_for_asparagine(viet_uniprot_swisspalm, 'Viet Uniprot Swisspalm')
+
+# Combine the data
+combined_stats_table <- rbind(stats_training_mammal, stats_holdout_mammal, stats_viet_uniprot_swisspalm)
+
+# Print the table to the console
+print(combined_stats_table)
+
+```
+
+
+
+## Motif or flanking amino acid frequency
+## Sequence Logos
+## GGseqlogo
+```{r}
+
+library(ggseqlogo)
+library(ggplot2)
+library(dplyr)
+
+# Define the function to generate sequence logos for cytoplasmic_type
+generate_seq_logo <- function(data, cytoplasmic_type, palmitoylation_status) {
+  # Filter data based on cytoplasmic_type, palmitoylation_status, and sequence length
+  filtered_data <- data %>%
+    filter(cytoplasmic_type == {{cytoplasmic_type}}, 
+           palmitoylation == palmitoylation_status,
+           nchar(window_sequence_n) == 5, 
+           nchar(window_sequence_c) == 5)
+  
+  # Diagnostic print statements
+  cat("Generating for cytoplasmic_type:", cytoplasmic_type, "and palmitoylation status:", palmitoylation_status, "\n")
+  cat("Number of sequences:", nrow(filtered_data), "\n")
+  
+  # Check if filtered_data is empty
+  if(nrow(filtered_data) == 0) {
+    cat("No data matches the filtering criteria.\n")
+    return()
+  }
+  
+  # Combine N-terminal and C-terminal sequences with a placeholder for cysteine
+  sequences <- paste0(filtered_data$window_sequence_n, "X", filtered_data$window_sequence_c)
+  
+  # Generate and plot the sequence logo
+  ggseqlogo(sequences) +
+    labs(title = paste("Cytoplasmic", cytoplasmic_type, "and Palmitoylation", palmitoylation_status))
+}
+
+# Function calls - ensure 'training_mammal' is your dataframe
+generate_seq_logo(training_mammal, "head", "no")
+generate_seq_logo(training_mammal, "head", "yes")
+generate_seq_logo(training_mammal, "loop", "no")
+generate_seq_logo(training_mammal, "loop", "yes")
+generate_seq_logo(training_mammal, "tail", "no")
+generate_seq_logo(training_mammal, "tail", "yes")
+
+
+```
+
+
+
+## Probability instead of Bits
+```{r}
+
+library(ggplot2)
+library(ggseqlogo)
+library(dplyr)
+
+# Define the function to generate sequence logos for cytoplasmic_type
+generate_seq_logo <- function(data, cytoplasmic_type, palmitoylation_status) {
+  # Filter data based on cytoplasmic_type, palmitoylation_status, and sequence length
+  filtered_data <- data %>%
+    filter(cytoplasmic_type == {{cytoplasmic_type}}, 
+           palmitoylation == palmitoylation_status,
+           nchar(window_sequence_n) == 5, 
+           nchar(window_sequence_c) == 5)
+  
+  # Diagnostic print statements
+  cat("Generating for cytoplasmic_type:", cytoplasmic_type, "and palmitoylation status:", palmitoylation_status, "\n")
+  cat("Number of sequences:", nrow(filtered_data), "\n")
+  
+  # Check if filtered_data is empty
+  if(nrow(filtered_data) == 0) {
+    cat("No data matches the filtering criteria.\n")
+    return()
+  }
+  
+  # Combine N-terminal and C-terminal sequences with a placeholder for cysteine
+  sequences <- paste0(filtered_data$window_sequence_n, "X", filtered_data$window_sequence_c)
+  
+  # Generate and plot the sequence logo
+  ggseqlogo(sequences, method = 'prob') +
+    labs(title = paste("Cytoplasmic", cytoplasmic_type, "and Palmitoylation", palmitoylation_status))
+}
+
+# Function calls - ensure 'training_mammal' is your dataframe
+generate_seq_logo(training_mammal, "head", "no")
+generate_seq_logo(training_mammal, "head", "yes")
+generate_seq_logo(training_mammal, "loop", "no")
+generate_seq_logo(training_mammal, "loop", "yes")
+generate_seq_logo(training_mammal, "tail", "no")
+generate_seq_logo(training_mammal, "tail", "yes")
+
+
+
+```
+
+
+
+## Transmembrane domains
+## Bits
+```{r}
+
+
+# Updated function to generate sequence logos with added diagnostics
+generate_seq_logo <- function(data, orientation, palmitoylation_status) {
+  # Filter data based on orientation, palmitoylation_status, and sequence length
+  filtered_data <- data %>%
+    filter(orientation == {{orientation}},  # Ensure the filter uses the function's argument
+           palmitoylation == palmitoylation_status,
+           nchar(window_sequence_n) == 5, 
+           nchar(window_sequence_c) == 5)
+  
+  # Diagnostic print statements
+  cat("Generating for orientation:", orientation, "and palmitoylation status:", palmitoylation_status, "\n")
+  cat("Number of sequences:", nrow(filtered_data), "\n")
+  
+  # Check if filtered_data is empty
+  if(nrow(filtered_data) == 0) {
+    cat("No data matches the filtering criteria.\n")
+    return()
+  }
+  
+  # Combine N-terminal and C-terminal sequences with a placeholder for cysteine
+  sequences <- paste0(filtered_data$window_sequence_n, "X", filtered_data$window_sequence_c)
+  
+  # Generate and plot the sequence logo
+  ggseqlogo(sequences, method = 'bits') +
+    labs(title = paste("Transmembrane Orientation", orientation, "and Palmitoylation", palmitoylation_status))
+}
+
+# Function calls - ensure 'training_mammal' is your dataframe
+generate_seq_logo(training_mammal, "inward", "no")
+generate_seq_logo(training_mammal, "inward", "yes")
+generate_seq_logo(training_mammal, "outward", "no")
+generate_seq_logo(training_mammal, "outward", "yes")
+
+
+```
+
+
+## Transmembrane
+## Probability instead of Bits
+```{r}
+
+# Updated function to generate sequence logos with added diagnostics
+generate_seq_logo <- function(data, orientation, palmitoylation_status) {
+  # Filter data based on orientation, palmitoylation_status, and sequence length
+  filtered_data <- data %>%
+    filter(orientation == {{orientation}},  # Ensure the filter uses the function's argument
+           palmitoylation == palmitoylation_status,
+           nchar(window_sequence_n) == 5, 
+           nchar(window_sequence_c) == 5)
+  
+  # Diagnostic print statements
+  cat("Generating for orientation:", orientation, "and palmitoylation status:", palmitoylation_status, "\n")
+  cat("Number of sequences:", nrow(filtered_data), "\n")
+  
+  # Check if filtered_data is empty
+  if(nrow(filtered_data) == 0) {
+    cat("No data matches the filtering criteria.\n")
+    return()
+  }
+  
+  # Combine N-terminal and C-terminal sequences with a placeholder for cysteine
+  sequences <- paste0(filtered_data$window_sequence_n, "X", filtered_data$window_sequence_c)
+  
+  # Generate and plot the sequence logo
+  ggseqlogo(sequences, method = 'prob') +
+    labs(title = paste("Transmembrane Orientation", orientation, "and Palmitoylation", palmitoylation_status))
+}
+
+# Function calls - ensure 'training_mammal' is your dataframe
+generate_seq_logo(training_mammal, "inward", "no")
+generate_seq_logo(training_mammal, "inward", "yes")
+generate_seq_logo(training_mammal, "outward", "no")
+generate_seq_logo(training_mammal, "outward", "yes")
+
+```
+
+
+## Organism percentages within training_mammal
+```{r}
+
+# Load necessary library
+library(dplyr)
+
+# Assuming your dataframe is called training_mammal and the column is organism
+organism_counts <- training_mammal %>%
+  count(organism) %>%
+  mutate(percentage = n / sum(n) * 100)
+
+# Print the percentages to the console
+print(organism_counts)
+
+# Alternatively, for a more formatted output
+organism_counts %>%
+  mutate(percentage = round(percentage, 2)) %>%
+  arrange(desc(percentage)) %>%
+  apply(1, function(row) cat(row["organism"], ": ", row["percentage"], "%\n", sep=""))
+
+```
+
+

@@ -1,0 +1,1436 @@
+---
+title: "proteolysis_coverage_mar_2024"
+output: html_document
+date: "2024-03-12"
+---
+
+
+## Proteolysis evaluation
+## Determine how many Cys sites are "identify-able" with trypsin
+
+```{r}
+#### Proteolysis Evaluation
+library(readr)
+library(dplyr)
+library(Peptides)
+
+# read in the entire mouse proteome
+uniprot_mouse_all <- read_csv("uniprot_mouse_all.csv")
+
+# separate into TM and non_TM
+# TM proteins
+mouse_TM <- uniprot_mouse_all %>%
+  filter(!is.na(Transmembrane))
+
+# non-TM proteins
+mouse_non_TM <- uniprot_mouse_all %>%
+  filter(is.na(Transmembrane))
+
+# remove the dataframe that has entire mouse proteome
+rm(uniprot_mouse_all)
+
+```
+
+
+# Define cys_position function to pull each cysteine number into a new column cys_position
+
+```{r}
+
+# Define the function
+expand_cys_positions <- function(df, sequence_column) {
+  # Create a row identifier
+  df <- df %>% mutate(row_id = row_number())
+  
+  # Find positions of 'C' and create a list column
+  df <- df %>%
+    mutate(cys_positions = lapply(.data[[sequence_column]], function(seq) {
+      which(strsplit(seq, "")[[1]] == "C")
+    }))
+  
+  # Keep original rows, but add an NA column for cys_position
+  original_rows <- df %>%
+    mutate(cys_position = NA)
+  
+  # Expand rows based on cys_positions, creating new rows for each position
+  expanded_rows <- df %>%
+    unnest(cys_positions) %>%
+    rename(cys_position = cys_positions)
+  
+  # Combine original and expanded rows
+  combined_df <- bind_rows(original_rows, expanded_rows) %>%
+    select(-cys_positions) %>% # Remove the list column
+    arrange(row_id) %>% # Sort by original row order
+    select(-row_id) # Remove the temporary row identifier
+  
+  return(combined_df)
+}
+
+
+```
+
+
+# Apply cys extraction
+```{r}
+
+library(dplyr)
+library(tidyr)
+library(purrr)
+
+expand_cysteines <- function(df) {
+  df %>%
+    # Add a row identifier
+    mutate(row_id = row_number()) %>%
+    # Apply function to each row
+    rowwise() %>%
+    # Create a list column where each entry is a vector of positions of 'C' plus one NA
+    mutate(cys_positions = list(c(which(strsplit(Sequence, "")[[1]] == "C"), NA))) %>%
+    # Ungroup to avoid rowwise operation in the next steps
+    ungroup() %>%
+    # Expand the dataframe by the cys_positions list, creating new rows
+    unnest(cys_positions) %>%
+    # Rename the new column
+    rename(cys_position = cys_positions) %>%
+    # Remove the temporary row_id column
+    select(-row_id)
+}
+
+# Apply the function to mouse TM and non TM dataframe
+mouse_TM <- expand_cysteines(mouse_TM)
+mouse_non_TM <- expand_cysteines(mouse_non_TM)
+
+# Keep only the rows that have a value in cys_position
+mouse_TM <- mouse_TM %>% filter(!is.na(cys_position))
+mouse_non_TM <- mouse_non_TM %>% filter(!is.na(cys_position))
+
+```
+
+
+
+# Define the proteolysis function
+```{r}
+
+#### Digest with trypsin and keep only the peptide containing designated cysteine
+# Define function for trypsin digestion with zero missed cleavages
+perform_digestion <- function(protein_sequence, cys_position) {
+  
+  # Split the sequence into an array of individual amino acids
+  sequence_array <- strsplit(protein_sequence, "")[[1]]
+  
+  # Find the indices of K, R not followed by P
+  cleavage_sites <- grep("K(?!P)|R(?!P)", sequence_array, perl = TRUE)
+  
+  # Add the start and end of the sequence to the cleavage sites
+  cleavage_sites <- sort(c(0, cleavage_sites, length(sequence_array)))
+  
+  # Find the peptide that contains the cysteine of interest
+  for (i in 1:(length(cleavage_sites) - 1)) {
+    start_site <- cleavage_sites[i] + 1
+    end_site <- cleavage_sites[i + 1]
+    
+    if (start_site <= cys_position & end_site >= cys_position) {
+      peptide_sequence <- paste(sequence_array[start_site:end_site], collapse = "")
+      return(peptide_sequence)
+    }
+  }
+  
+  # Return NA if no matching peptide is found
+  return(NA)
+}
+
+```
+
+
+# Apply the trypsin digestion to mouse TM and non-TM proteins
+```{r}
+
+# Apply the trypsin digestion function to TM proteins
+mouse_TM$trypsin_sequence_0 <- mapply(perform_digestion, mouse_TM$Sequence, mouse_TM$cys_position)
+mouse_non_TM$trypsin_sequence_0 <- mapply(perform_digestion, mouse_non_TM$Sequence, mouse_non_TM$cys_position)
+
+```
+
+
+# deal with any non-canonical amino acids in the peptide sequence
+```{r}
+
+## Remove any rows that have foreign (non-canonical) amino acids in the trypsin peptide sequence
+# transfer these rows into another dataframe for inspection
+
+# Function to filter out non-canonical amino acids
+filter_non_canonical <- function(df, sequence_column_name) {
+  # Define a regex pattern for non-standard amino acids
+  # This pattern matches any character not in the set of standard amino acids
+  non_standard_pattern <- "[^ARNDCQEGHILKMFPSTWYV]"
+  
+  # Identify rows with non-standard amino acids
+  non_canonical_indices <- grepl(non_standard_pattern, df[[sequence_column_name]], ignore.case = TRUE)
+  
+  # Split the dataframe based on presence of non-standard amino acids
+  df_non_canonical <- df[non_canonical_indices, ]
+  df_canonical <- df[!non_canonical_indices, ]
+  
+  return(list(canonical = df_canonical, non_canonical = df_non_canonical))
+}
+
+# Apply the function to mouse_TM and mouse_non_TM dataframes
+result_mouse_TM <- filter_non_canonical(mouse_TM, "trypsin_sequence_0")
+mouse_TM <- result_mouse_TM$canonical
+mouse_TM_non_canonical <- result_mouse_TM$non_canonical
+
+result_mouse_non_TM <- filter_non_canonical(mouse_non_TM, "trypsin_sequence_0")
+mouse_non_TM <- result_mouse_non_TM$canonical
+mouse_non_TM_non_canonical <- result_mouse_non_TM$non_canonical
+
+# remove un-needed dataframes
+rm(result_mouse_TM)
+rm(result_mouse_non_TM)
+
+```
+
+
+# Calculate peptide molecular weight
+# Visualize
+```{r}
+
+## Determine molecular weights of each peptide
+
+# Calculate the molecular weight of the trypsin_sequence_0
+mouse_TM$trypsin_mw_0 <- sapply(mouse_TM$trypsin_sequence_0, mw)
+mouse_non_TM$trypsin_mw_0 <- sapply(mouse_non_TM$trypsin_sequence_0, mw)
+
+# Histogram of molecular weights with trypsin and zero missed cleavages
+library(ggplot2)
+
+# TM
+ggplot(mouse_TM, aes(x = trypsin_mw_0)) +
+  geom_histogram(binwidth = 100, fill = "steelblue", color = "black") +
+  annotate("rect", xmin = 700, xmax = 3000, ymin = 0, ymax = Inf, alpha = 0.2, fill = "orange") +
+  labs(x = "Molecular Weight (Da)", y = "Count", 
+       title = "MW of Tryptic Cys-peptides: Transmembrane") +
+  theme_minimal() +
+  scale_x_continuous(limits = c(0, 10000))
+
+# non-TM
+ggplot(mouse_non_TM, aes(x = trypsin_mw_0)) +
+  geom_histogram(binwidth = 100, fill = "steelblue", color = "black") +
+  annotate("rect", xmin = 700, xmax = 3000, ymin = 0, ymax = Inf, alpha = 0.2, fill = "orange") +
+  labs(x = "Molecular Weight (Da)", y = "Count", 
+       title = "MW of Tryptic Cys-peptides: Non-Transmembrane") +
+  theme_minimal() +
+  scale_x_continuous(limits = c(0, 10000))
+
+
+# Perform calculations
+median_mouse_TM_mw <- median(mouse_TM$trypsin_mw_0, na.rm = TRUE)
+median_mouse_non_TM_mw <- median(mouse_non_TM$trypsin_mw_0, na.rm = TRUE)
+
+std_dev_TM <- sd(mouse_TM$trypsin_mw_0, na.rm = TRUE)
+std_dev_non_TM <- sd(mouse_non_TM$trypsin_mw_0, na.rm = TRUE)
+
+variance_TM <- var(mouse_TM$trypsin_mw_0, na.rm = TRUE)
+variance_non_TM <- var(mouse_non_TM$trypsin_mw_0, na.rm = TRUE)
+
+iqr_TM <- IQR(mouse_TM$trypsin_mw_0, na.rm = TRUE)
+iqr_non_TM <- IQR(mouse_non_TM$trypsin_mw_0, na.rm = TRUE)
+
+quantile_75th_TM <- quantile(mouse_TM$trypsin_mw_0, 0.75, na.rm = TRUE)
+quantile_90th_TM <- quantile(mouse_TM$trypsin_mw_0, 0.90, na.rm = TRUE)
+quantile_75th_non_TM <- quantile(mouse_non_TM$trypsin_mw_0, 0.75, na.rm = TRUE)
+quantile_90th_non_TM <- quantile(mouse_non_TM$trypsin_mw_0, 0.90, na.rm = TRUE)
+
+mean_TM <- mean(mouse_TM$trypsin_mw_0, na.rm = TRUE)
+mean_non_TM <- mean(mouse_non_TM$trypsin_mw_0, na.rm = TRUE)
+
+high_value_threshold <- quantile(c(mouse_TM$trypsin_mw_0, mouse_non_TM$trypsin_mw_0), 0.90, na.rm = TRUE)
+
+prop_above_threshold_TM <- sum(mouse_TM$trypsin_mw_0 > high_value_threshold, na.rm = TRUE) / sum(!is.na(mouse_TM$trypsin_mw_0))
+prop_above_threshold_non_TM <- sum(mouse_non_TM$trypsin_mw_0 > high_value_threshold, na.rm = TRUE) / sum(!is.na(mouse_non_TM$trypsin_mw_0))
+
+# Print all results together
+cat("Median trypsin_mw_0 for mouse_TM: ", median_mouse_TM_mw, "\n",
+    "Median trypsin_mw_0 for mouse_non_TM: ", median_mouse_non_TM_mw, "\n\n",
+    "Standard Deviation of trypsin_mw_0 for mouse_TM: ", std_dev_TM, "\n",
+    "Standard Deviation of trypsin_mw_0 for mouse_non_TM: ", std_dev_non_TM, "\n\n",
+    "Variance of trypsin_mw_0 for mouse_TM: ", variance_TM, "\n",
+    "Variance of trypsin_mw_0 for mouse_non_TM: ", variance_non_TM, "\n\n",
+    "IQR of trypsin_mw_0 for mouse_TM: ", iqr_TM, "\n",
+    "IQR of trypsin_mw_0 for mouse_non_TM: ", iqr_non_TM, "\n\n",
+    "75th percentile of trypsin_mw_0 for mouse_TM: ", quantile_75th_TM, "\n",
+    "90th percentile of trypsin_mw_0 for mouse_TM: ", quantile_90th_TM, "\n",
+    "75th percentile of trypsin_mw_0 for mouse_non_TM: ", quantile_75th_non_TM, "\n",
+    "90th percentile of trypsin_mw_0 for mouse_non_TM: ", quantile_90th_non_TM, "\n\n",
+    "Mean of trypsin_mw_0 for mouse_TM: ", mean_TM, "\n",
+    "Mean of trypsin_mw_0 for mouse_non_TM: ", mean_non_TM, "\n\n",
+    "Proportion of values above the 90th percentile threshold for mouse_TM: ", prop_above_threshold_TM, "\n",
+    "Proportion of values above the 90th percentile threshold for mouse_non_TM: ", prop_above_threshold_non_TM)
+
+
+
+```
+
+# function to calculate hydrophobicity
+```{r}
+
+# Determine hydrophobicity of each peptide
+# Define the Kyte-Doolittle hydrophobicity scale
+kyte_doolittle <- c('A' = 1.8, 'R' = -4.5, 'N' = -3.5, 'D' = -3.5, 'C' = 2.5,
+                    'Q' = -3.5, 'E' = -3.5, 'G' = -0.4, 'H' = -3.2, 'I' = 4.5,
+                    'L' = 3.8, 'K' = -3.9, 'M' = 1.9, 'F' = 2.8, 'P' = -1.6,
+                    'S' = -0.8, 'T' = -0.7, 'W' = -0.9, 'Y' = -1.3, 'V' = 4.2)
+
+# Function to calculate hydrophobicity
+calc_hydrophobicity <- function(sequence) {
+  amino_acids <- strsplit(sequence, split = "")[[1]]
+  hydrophobicity_scores <- kyte_doolittle[amino_acids]
+  mean(hydrophobicity_scores, na.rm = TRUE)  # Mean hydrophobicity of the peptide
+}
+
+```
+
+
+# Apply hydrophobicity function
+# Visualize
+```{r}
+
+# Apply the hydrophobicity function to TM and non-TM dataframes
+mouse_TM$trypsin_hydrophobicity_0 <- sapply(mouse_TM$trypsin_sequence_0, calc_hydrophobicity)
+mouse_non_TM$trypsin_hydrophobicity_0 <- sapply(mouse_non_TM$trypsin_sequence_0, calc_hydrophobicity)
+
+# Visualize
+ggplot(mouse_TM, aes(x = trypsin_hydrophobicity_0)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black") +
+  annotate("rect", xmin = -2, xmax = 1, ymin = 0, ymax = Inf, alpha = 0.2, fill = "orange") +
+  labs(x = "Kyte-Doolittle Hydrophobicity", y = "Count", 
+       title = "GRAVY of Tryptic Cys-peptides: Transmembrane") +
+  theme_minimal() +
+  scale_x_continuous(limits = c(-3, +4))
+
+ggplot(mouse_non_TM, aes(x = trypsin_hydrophobicity_0)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black") +
+  annotate("rect", xmin = -2, xmax = 1, ymin = 0, ymax = Inf, alpha = 0.2, fill = "orange") +
+  labs(x = "Kyte-Doolittle Hydrophobicity", y = "Count", 
+       title = "GRAVY of Tryptic Cys-peptides: Non-Transmembrane") +
+  theme_minimal() +
+  scale_x_continuous(limits = c(-3, +4))
+
+```
+
+# Stats for number of Cys-peptides that fall within range of detection
+# Transmembrane proteins
+```{r}
+
+## Determine how many Cys sites fall in the range of detection
+# cutoff MW is MW 700 - 3000
+# cutoff hydrophobicity is -2 to +1
+
+# 1) $trypsin_mw_0 between 700 - 3000 AND 2) $trypsin_hydrophobicity_0 between -2 and +1
+mouse_TM_satisfy_both <- nrow(mouse_TM[ 
+  mouse_TM$trypsin_mw_0 >= 700 & 
+  mouse_TM$trypsin_mw_0 <= 3000 & 
+  mouse_TM$trypsin_hydrophobicity_0 >= -2 & 
+  mouse_TM$trypsin_hydrophobicity_0 <= 1, ])
+
+# satisfy #1 but not #2
+mouse_TM_satisfy_mw_only <- nrow(mouse_TM[ 
+  mouse_TM$trypsin_mw_0 >= 700 & 
+  mouse_TM$trypsin_mw_0 <= 3000 & 
+  !(mouse_TM$trypsin_hydrophobicity_0 >= -2 & 
+  mouse_TM$trypsin_hydrophobicity_0 <= 1), ])
+
+# satisfy #2 but not #1
+mouse_TM_satisfy_hydrophobicity_only <- nrow(mouse_TM[ 
+  !(mouse_TM$trypsin_mw_0 >= 700 & 
+  mouse_TM$trypsin_mw_0 <= 3000) & 
+  mouse_TM$trypsin_hydrophobicity_0 >= -2 & 
+  mouse_TM$trypsin_hydrophobicity_0 <= 1, ])
+
+# satisfy neither
+mouse_TM_satisfy_neither <- nrow(mouse_TM[ 
+  !(mouse_TM$trypsin_mw_0 >= 700 & 
+  mouse_TM$trypsin_mw_0 <= 3000) & 
+  !(mouse_TM$trypsin_hydrophobicity_0 >= -2 & 
+  mouse_TM$trypsin_hydrophobicity_0 <= 1), ])
+
+# Print the counts
+cat("Cys-peptides that are within both MW and hydrophobicity ranges: ", mouse_TM_satisfy_both, "\n",
+    "Cys-peptides that are outside of hydrophobicity range: ", mouse_TM_satisfy_mw_only, "\n",
+    "Cys-peptides that are outside of MW range: ", mouse_TM_satisfy_hydrophobicity_only, "\n",
+    "Cys-peptides that are outisde of both hydrophobicity and MW ranges: ", mouse_TM_satisfy_neither)
+
+## Visualize by pie chart
+# Data prep
+categories <- c("Satisfy Both", "Satisfy MW Only", "Satisfy Hydrophobicity Only", "Satisfy Neither")
+counts <- c(mouse_TM_satisfy_both, mouse_TM_satisfy_mw_only, mouse_TM_satisfy_hydrophobicity_only, mouse_TM_satisfy_neither)
+data_for_pie <- data.frame(Category = categories, Count = counts)
+
+# Define custom colors for each category
+colors <- c("Satisfy Both" = "blue", 
+            "Satisfy MW Only" = "purple", 
+            "Satisfy Hydrophobicity Only" = "yellow2", 
+            "Satisfy Neither" = "orange")
+
+# Create the pie chart with custom colors
+ggplot(data_for_pie, aes(x = "", y = Count, fill = Category)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  labs(title = "Cys-peptides Within Ranges of Detection: Transmembrane", fill = "Criteria") +
+  theme(legend.title = element_text(size = 12), legend.text = element_text(size = 10))
+
+
+## Group into 2 categories (satisfying both MW and hydrophobicity or not satisifying both)
+# Data preparation for simplified pie chart
+simplified_categories <- c("Satisfy Both", "Does Not Satisfy Both")
+simplified_counts <- c(mouse_TM_satisfy_both, sum(mouse_TM_satisfy_mw_only, mouse_TM_satisfy_hydrophobicity_only, mouse_TM_satisfy_neither))
+simplified_data_for_pie <- data.frame(Category = simplified_categories, Count = simplified_counts)
+
+# Define custom colors for the simplified categories
+simplified_colors <- c("Satisfy Both" = "blue", "Does Not Satisfy Both" = "orange")
+
+# Create the simplified pie chart
+ggplot(simplified_data_for_pie, aes(x = "", y = Count, fill = Category)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = simplified_colors) +
+  labs(title = "Cys-peptides Within Ranges of Detection: Transmembrane", fill = "Criteria") +
+  theme(legend.title = element_text(size = 12), legend.text = element_text(size = 10))
+
+
+```
+
+
+# Stats for number of Cys-peptides that fall within range of detection
+# Non-Transmembrane proteins
+```{r}
+
+## Determine how many Cys sites fall in the range of detection
+# cutoff MW is MW 700 - 3000
+# cutoff hydrophobicity is -2 to +1
+
+# 1) $trypsin_mw_0 between 700 - 3000 AND 2) $trypsin_hydrophobicity_0 between -2 and +1
+mouse_non_TM_satisfy_both <- nrow(mouse_non_TM[ 
+  mouse_non_TM$trypsin_mw_0 >= 700 & 
+  mouse_non_TM$trypsin_mw_0 <= 3000 & 
+  mouse_non_TM$trypsin_hydrophobicity_0 >= -2 & 
+  mouse_non_TM$trypsin_hydrophobicity_0 <= 1, ])
+
+# satisfy #1 but not #2
+mouse_non_TM_satisfy_mw_only <- nrow(mouse_non_TM[ 
+  mouse_non_TM$trypsin_mw_0 >= 700 & 
+  mouse_non_TM$trypsin_mw_0 <= 3000 & 
+  !(mouse_non_TM$trypsin_hydrophobicity_0 >= -2 & 
+  mouse_non_TM$trypsin_hydrophobicity_0 <= 1), ])
+
+# satisfy #2 but not #1
+mouse_non_TM_satisfy_hydrophobicity_only <- nrow(mouse_non_TM[ 
+  !(mouse_non_TM$trypsin_mw_0 >= 700 & 
+  mouse_non_TM$trypsin_mw_0 <= 3000) & 
+  mouse_non_TM$trypsin_hydrophobicity_0 >= -2 & 
+  mouse_non_TM$trypsin_hydrophobicity_0 <= 1, ])
+
+# satisfy neither
+mouse_non_TM_satisfy_neither <- nrow(mouse_non_TM[ 
+  !(mouse_non_TM$trypsin_mw_0 >= 700 & 
+  mouse_non_TM$trypsin_mw_0 <= 3000) & 
+  !(mouse_non_TM$trypsin_hydrophobicity_0 >= -2 & 
+  mouse_non_TM$trypsin_hydrophobicity_0 <= 1), ])
+
+# Print the counts
+cat("Cys-peptides that are within both MW and hydrophobicity ranges: ", mouse_non_TM_satisfy_both, "\n",
+    "Cys-peptides that are outside of hydrophobicity range: ", mouse_non_TM_satisfy_mw_only, "\n",
+    "Cys-peptides that are outside of MW range: ", mouse_non_TM_satisfy_hydrophobicity_only, "\n",
+    "Cys-peptides that are outisde of both hydrophobicity and MW ranges: ", mouse_non_TM_satisfy_neither)
+
+
+## Visualize by pie chart
+# Data prep
+categories <- c("Satisfy Both", "Satisfy MW Only", "Satisfy Hydrophobicity Only", "Satisfy Neither")
+counts <- c(mouse_non_TM_satisfy_both, mouse_non_TM_satisfy_mw_only, mouse_non_TM_satisfy_hydrophobicity_only, mouse_non_TM_satisfy_neither)
+data_for_pie <- data.frame(Category = categories, Count = counts)
+
+# Define custom colors for each category
+colors <- c("Satisfy Both" = "blue", 
+            "Satisfy MW Only" = "purple", 
+            "Satisfy Hydrophobicity Only" = "yellow2", 
+            "Satisfy Neither" = "orange")
+
+# Create the pie chart with custom colors
+ggplot(data_for_pie, aes(x = "", y = Count, fill = Category)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  labs(title = "Cys-peptides Within Ranges of Detection: Non-Transmembrane", fill = "Criteria") +
+  theme(legend.title = element_text(size = 12), legend.text = element_text(size = 10))
+
+
+## Group into 2 categories (satisfying both MW and hydrophobicity or not satisifying both)
+# Data preparation for simplified pie chart
+simplified_categories <- c("Satisfy Both", "Does Not Satisfy Both")
+simplified_counts <- c(mouse_non_TM_satisfy_both, sum(mouse_non_TM_satisfy_mw_only, mouse_non_TM_satisfy_hydrophobicity_only, mouse_non_TM_satisfy_neither))
+simplified_data_for_pie <- data.frame(Category = simplified_categories, Count = simplified_counts)
+
+# Define custom colors for the simplified categories
+simplified_colors <- c("Satisfy Both" = "blue", "Does Not Satisfy Both" = "orange")
+
+# Create the simplified pie chart
+ggplot(simplified_data_for_pie, aes(x = "", y = Count, fill = Category)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  scale_fill_manual(values = simplified_colors) +
+  labs(title = "Cys-peptides Within Ranges of Detection: Non-Transmembrane", fill = "Criteria") +
+  theme(legend.title = element_text(size = 12), legend.text = element_text(size = 10))
+
+
+
+```
+
+## Examine the same statistics for Cys sites that are proximal to the membrane
+
+# Extract the transmembrane range
+```{r}
+
+library(dplyr)
+library(tidyr)
+
+transmem_extract <- function(df) {
+  df$Transmembrane <- as.character(df$Transmembrane)
+  
+  expanded_df <- df %>%
+    mutate(transmem_segment = strsplit(Transmembrane, ";")) %>%
+    unnest(transmem_segment) %>%
+    filter(grepl("TRANSMEM", transmem_segment)) %>%
+    mutate(
+      transmem_start_raw = sub(".*TRANSMEM (\\d+)\\.\\.(\\d+).*", "\\1", transmem_segment),
+      transmem_end_raw = sub(".*TRANSMEM (\\d+)\\.\\.(\\d+).*", "\\2", transmem_segment),
+      transmem_start = as.integer(transmem_start_raw),
+      transmem_end = as.integer(transmem_end_raw)
+    ) %>%
+    select(-transmem_segment)
+  
+  # Diagnose rows with NA in transmem_start or transmem_end
+  problematic_rows <- expanded_df %>% 
+    filter(is.na(transmem_start) | is.na(transmem_end)) %>%
+    select(transmem_start_raw, transmem_end_raw)
+  
+  if(nrow(problematic_rows) > 0) {
+    print("Problematic rows identified with NA in start or end positions:")
+    print(problematic_rows)
+  } else {
+    print("No problematic rows identified.")
+  }
+  
+  # Returning the original intended output for now; adjust as needed based on your requirements
+  return(expanded_df %>% select(-transmem_start_raw, -transmem_end_raw))
+}
+
+```
+
+
+# Extract the transmembrane ranges for mouse transmembrane dataset
+```{r}
+
+mouse_TM_proximity <- transmem_extract(mouse_TM)
+
+# One protein (Q99JH7) yielded NA values for the transmem start and end but the others all worked fine
+# remove the rows that have NA for this protein (23 rows)
+mouse_TM_proximity <- mouse_TM_proximity %>%
+  filter(!is.na(transmem_start) & !is.na(transmem_end))
+
+```
+
+
+# Define a function to assign whether a Cys is within 20 amino acids of the transmembrane region
+```{r}
+
+prox_20_extract <- function(df) {
+  df$transmem_proximal_20 <- "no" # Initialize the new column with 'no'
+  
+  # Update the column based on the condition
+  df <- df %>%
+    mutate(transmem_proximal_20 = ifelse(abs(cys_position - transmem_start) <= 20 | 
+                                         abs(cys_position - transmem_end) <= 20, 
+                                         "yes", "no"))
+  
+  return(df)
+}
+
+```
+
+
+## Apply prox_20_extract to mouse transmembrane proteins
+```{r}
+
+mouse_TM_proximity <- prox_20_extract(mouse_TM_proximity)
+
+# print out the table for number of rows that are within 20 amino acids of transmembrane region and how many are not
+table(mouse_TM_proximity$transmem_proximal_20)
+
+```
+
+# Function to remove redundant rows and keep only the unique
+```{r}
+
+prox_20_remove_redundant <- function(df) {
+  # Remove transmem_start and transmem_end columns
+  df <- df %>% select(-transmem_start, -transmem_end)
+  
+  # Ensure all rows are unique based on all columns except for transmem_proximal_20
+  df <- df %>% 
+    mutate(row_id = 1:n()) %>%
+    distinct(.keep_all = TRUE) %>%
+    group_by(across(-c(transmem_proximal_20, row_id))) %>%
+    # Within each group, if there's a "yes", keep "yes" rows only, else keep all
+    mutate(keep_row = if("yes" %in% transmem_proximal_20) "yes" else transmem_proximal_20) %>%
+    filter(transmem_proximal_20 == keep_row) %>%
+    ungroup() %>%
+    select(-keep_row, -row_id)  # Remove the temporary columns
+
+  # Keep only unique rows across the entire dataframe
+  df <- df %>% 
+    distinct(.keep_all = TRUE)
+  
+  return(df)
+}
+```
+
+
+# Apply this function to mouse transmembrane dataframe
+```{r}
+
+mouse_TM_proximity <- prox_20_remove_redundant(mouse_TM_proximity)
+
+# print out table
+table(mouse_TM_proximity$transmem_proximal_20)
+
+```
+
+
+## Compare Cys sites that are proximal to membrane and not-proximal
+## Visualize MW histogram and stats
+
+```{r}
+
+# Adjust the ggplot call for the mouse_TM_proximity dataframe
+ggplot(mouse_TM_proximity, aes(x = trypsin_mw_0)) +
+  geom_histogram(binwidth = 100, fill = "steelblue", color = "black") +
+  annotate("rect", xmin = 700, xmax = 3000, ymin = 0, ymax = Inf, alpha = 0.2, fill = "orange") +
+  labs(x = "Molecular Weight (Da)", y = "Count", 
+       title = "MW of Tryptic Cys-peptides: Transmembrane Proximity") +
+  theme_minimal() +
+  scale_x_continuous(limits = c(0, 10000)) +
+  facet_wrap(~ transmem_proximal_20, ncol = 1, scales = "free_y")
+
+
+# Split the data into 'yes' and 'no' groups based on transmem_proximal_20
+mouse_TM_yes <- filter(mouse_TM_proximity, transmem_proximal_20 == "yes")
+mouse_TM_no <- filter(mouse_TM_proximity, transmem_proximal_20 == "no")
+
+# Function to calculate statistics
+calculate_statistics <- function(df, group_name) {
+  median_val <- median(df$trypsin_mw_0, na.rm = TRUE)
+  std_dev_val <- sd(df$trypsin_mw_0, na.rm = TRUE)
+  variance_val <- var(df$trypsin_mw_0, na.rm = TRUE)
+  iqr_val <- IQR(df$trypsin_mw_0, na.rm = TRUE)
+  quantile_75th_val <- quantile(df$trypsin_mw_0, 0.75, na.rm = TRUE)
+  quantile_90th_val <- quantile(df$trypsin_mw_0, 0.90, na.rm = TRUE)
+  mean_val <- mean(df$trypsin_mw_0, na.rm = TRUE)
+  high_value_threshold <- quantile(df$trypsin_mw_0, 0.90, na.rm = TRUE)
+  prop_above_threshold_val <- sum(df$trypsin_mw_0 > high_value_threshold, na.rm = TRUE) / sum(!is.na(df$trypsin_mw_0))
+  
+  cat("Statistics for group:", group_name, "\n",
+      "Median trypsin_mw_0: ", median_val, "\n",
+      "Standard Deviation of trypsin_mw_0: ", std_dev_val, "\n",
+      "Variance of trypsin_mw_0: ", variance_val, "\n",
+      "IQR of trypsin_mw_0: ", iqr_val, "\n",
+      "75th percentile of trypsin_mw_0: ", quantile_75th_val, "\n",
+      "90th percentile of trypsin_mw_0: ", quantile_90th_val, "\n",
+      "Mean of trypsin_mw_0: ", mean_val, "\n",
+      "Proportion of values above the 90th percentile threshold: ", prop_above_threshold_val, "\n\n")
+}
+
+# Calculate and print statistics for each group
+calculate_statistics(mouse_TM_yes, "yes")
+calculate_statistics(mouse_TM_no, "no")
+
+```
+
+
+## Hydrophobicity visualization
+```{r}
+
+# Adjust the ggplot call for the mouse_TM_proximity dataframe to compare hydrophobicity
+ggplot(mouse_TM_proximity, aes(x = trypsin_hydrophobicity_0)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black") +
+  annotate("rect", xmin = -2, xmax = 1, ymin = 0, ymax = Inf, alpha = 0.2, fill = "orange") +
+  labs(x = "Kyte-Doolittle Hydrophobicity", y = "Count", 
+       title = "GRAVY of Tryptic Cys-peptides: Proximity to Transmembrane Regions") +
+  theme_minimal() +
+  scale_x_continuous(limits = c(-3, +4)) +
+  facet_wrap(~ transmem_proximal_20, ncol = 1, scales = "free_y")
+
+
+```
+
+# Pie charts comparing proximal to non-proximal Cys
+```{r}
+
+calculate_counts <- function(df_subset, label) {
+  satisfy_both <- nrow(df_subset[
+    df_subset$trypsin_mw_0 >= 700 &
+    df_subset$trypsin_mw_0 <= 3000 &
+    df_subset$trypsin_hydrophobicity_0 >= -2 &
+    df_subset$trypsin_hydrophobicity_0 <= 1, ])
+  
+  satisfy_mw_only <- nrow(df_subset[
+    df_subset$trypsin_mw_0 >= 700 &
+    df_subset$trypsin_mw_0 <= 3000 &
+    !(df_subset$trypsin_hydrophobicity_0 >= -2 &
+      df_subset$trypsin_hydrophobicity_0 <= 1), ])
+  
+  satisfy_hydrophobicity_only <- nrow(df_subset[
+    !(df_subset$trypsin_mw_0 >= 700 &
+      df_subset$trypsin_mw_0 <= 3000) &
+    df_subset$trypsin_hydrophobicity_0 >= -2 &
+    df_subset$trypsin_hydrophobicity_0 <= 1, ])
+  
+  satisfy_neither <- nrow(df_subset[
+    !(df_subset$trypsin_mw_0 >= 700 &
+      df_subset$trypsin_mw_0 <= 3000) &
+    !(df_subset$trypsin_hydrophobicity_0 >= -2 &
+      df_subset$trypsin_hydrophobicity_0 <= 1), ])
+  
+  # Print the counts
+  cat("For", label, "- Cys-peptides that:\n",
+      "Are within both MW and hydrophobicity ranges: ", satisfy_both, "\n",
+      "Are outside of hydrophobicity range only: ", satisfy_mw_only, "\n",
+      "Are outside of MW range only: ", satisfy_hydrophobicity_only, "\n",
+      "Are outside of both hydrophobicity and MW ranges: ", satisfy_neither, "\n\n")
+  
+  # Return a list of counts for plotting
+  return(c(satisfy_both, satisfy_mw_only, satisfy_hydrophobicity_only, satisfy_neither))
+}
+
+# Separate the dataframe by transmem_proximal_20 and calculate counts
+mouse_TM_yes <- mouse_TM_proximity[mouse_TM_proximity$transmem_proximal_20 == "yes", ]
+mouse_TM_no <- mouse_TM_proximity[mouse_TM_proximity$transmem_proximal_20 == "no", ]
+
+counts_yes <- calculate_counts(mouse_TM_yes, "Transmem Proximal YES")
+counts_no <- calculate_counts(mouse_TM_no, "Transmem Proximal NO")
+
+
+### Pie Charts
+# Function to create pie chart
+create_pie_chart <- function(counts, label) {
+  data_for_pie <- data.frame(
+    Category = c("Satisfy Both", "Satisfy MW Only", "Satisfy Hydrophobicity Only", "Satisfy Neither"),
+    Count = counts
+  )
+  
+  colors <- c("Satisfy Both" = "blue", 
+              "Satisfy MW Only" = "purple", 
+              "Satisfy Hydrophobicity Only" = "yellow2", 
+              "Satisfy Neither" = "orange")
+  
+  ggplot(data_for_pie, aes(x = "", y = Count, fill = Category)) +
+    geom_bar(width = 1, stat = "identity") +
+    coord_polar("y", start = 0) +
+    theme_void() +
+    scale_fill_manual(values = colors) +
+    labs(title = paste("Cys-peptides Within Ranges of Detection:", label), fill = "Criteria") +
+    theme(legend.title = element_text(size = 12), legend.text = element_text(size = 10))
+}
+
+# Create pie charts
+create_pie_chart(counts_yes, "Transmem Proximal YES")
+create_pie_chart(counts_no, "Transmem Proximal NO")
+
+
+# Function to create a simplified pie chart
+create_simplified_pie_chart <- function(counts, label) {
+  # Counts: 1st element is 'Satisfy Both', sum of the rest is 'Does Not Satisfy Both'
+  data_for_pie <- data.frame(
+    Category = c("Satisfy Both", "Does Not Satisfy Both"),
+    Count = c(counts[1], sum(counts[-1]))
+  )
+  
+  colors <- c("Satisfy Both" = "blue", "Does Not Satisfy Both" = "orange")
+  
+  ggplot(data_for_pie, aes(x = "", y = Count, fill = Category)) +
+    geom_bar(width = 1, stat = "identity") +
+    coord_polar("y", start = 0) +
+    theme_void() +
+    scale_fill_manual(values = colors) +
+    labs(title = paste("Cys-peptides Within Detection Ranges:", label), fill = "Criteria") +
+    theme(legend.title = element_text(size = 12), legend.text = element_text(size = 10))
+}
+
+# Create simplified pie charts for both "yes" and "no" subsets
+create_simplified_pie_chart(counts_yes, "Transmem Proximal YES")
+create_simplified_pie_chart(counts_no, "Transmem Proximal NO")
+
+# Function to print percentages for the pie charts
+print_pie_chart_percentages <- function(counts, label) {
+  total_counts <- sum(counts)
+  percentages <- counts / total_counts * 100
+  
+  cat("Percentages for", label, ":\n",
+      "Satisfy Both: ", round(percentages[1], 2), "%\n",
+      "Satisfy MW Only: ", round(percentages[2], 2), "%\n",
+      "Satisfy Hydrophobicity Only: ", round(percentages[3], 2), "%\n",
+      "Satisfy Neither: ", round(percentages[4], 2), "%\n\n")
+}
+
+# Print percentages for both "yes" and "no" subsets before creating pie charts
+print_pie_chart_percentages(counts_yes, "Transmem Proximal YES")
+print_pie_chart_percentages(counts_no, "Transmem Proximal NO")
+
+
+```
+
+
+## Scatterplot
+
+
+```{r}
+
+# Scatter plot with dashed rectangle for specific molecular weight and hydrophobicity range
+scatter_plot <- ggplot(mouse_TM_proximity, aes(x = trypsin_hydrophobicity_0, y = trypsin_mw_0, color = transmem_proximal_20)) +
+  geom_point(alpha = 0.05) +  # Adjust alpha for better visibility of point density
+  scale_size_manual(values = c("Yes" = 1, "No" = 1)) +  # Same sizes for yes and no
+  scale_color_manual(values = c("yes" = "darkcyan", "no" = "gray")) +  # Define custom colors for the groups
+  labs(x = "Trypsin Hydrophobicity", y = "Molecular Weight (Da)", title = "Scatter Plot of Trypsin Peptides",
+       color = "Transmembrane Proximal") +  # Label axes, title, and legend
+  ylim(0, 10000) +  # Set y-axis limits
+  xlim(-3,3) + # Se x-axis limits
+  theme_minimal() +  # Apply a minimal theme for aesthetics
+  geom_rect(aes(xmin = -2, xmax = 1, ymin = 700, ymax = 3000), inherit.aes = FALSE, 
+            fill = NA, color = "black", size = 1.0, linetype = "dashed")  # Add dashed rectangle
+
+# Print the updated plot
+print(scatter_plot)
+
+```
+
+
+
+
+
+### Determine Whether there is Bias against proximal Cys within SwissPalm
+
+# Read in the swisspalm dataset
+```{r}
+
+library(readr)
+swisspalm_sites_all <- read_csv("swisspalm_sites_all.csv", 
+    skip = 4)
+
+# Filter for mouse
+# Assuming swisspalm_sites_all is your dataframe and organism is the column of interest
+swisspalm_sites_mouse <- swisspalm_sites_all %>%
+  filter(organism == 'Mus musculus')
+
+# remove the dataframe with all sites
+rm(swisspalm_sites_all)
+
+```
+
+
+## Match the swisspalm to the proximity dataset from the mouse proteome
+```{r}
+
+# Initialize new column for the swisspalm matching
+mouse_TM_proximity <- mouse_TM_proximity %>%
+  mutate(swisspalm_match = "No")
+
+# perform matching for each row
+# a match is if Entry = uniprot_ac AND cys_position = pos
+mouse_TM_proximity <- mouse_TM_proximity %>%
+  rowwise() %>%
+  mutate(swisspalm_match = if_else(Entry %in% swisspalm_sites_mouse$uniprot_ac & cys_position %in% swisspalm_sites_mouse$pos[swisspalm_sites_mouse$uniprot_ac == Entry], "Yes", swisspalm_match))
+
+
+```
+
+
+## Percentage of Cys that are proximal to membrane in entire proteome
+```{r}
+
+# Calculate the total number of rows
+total_rows <- nrow(mouse_TM_proximity)
+
+# Calculate the number of rows where transmem_proximal_20 is "yes"
+yes_count <- mouse_TM_proximity %>%
+  filter(transmem_proximal_20 == "yes") %>%
+  nrow()
+
+# Calculate the percentage
+percentage_yes <- (yes_count / total_rows) * 100
+
+# Print the result
+print(paste("Percentage of rows with transmem_proximal_20 = yes:", percentage_yes, "%"))
+
+```
+
+
+
+## Percentage of. Cys that are proximal to membrane in SwissPalm
+```{r}
+
+# Filter for rows where swisspalm_match is "Yes"
+filtered_data <- mouse_TM_proximity %>%
+  filter(swisspalm_match == "Yes")
+
+# Calculate the total number of rows in the filtered dataset
+total_rows_filtered <- nrow(filtered_data)
+
+# Calculate the number of rows where transmem_proximal_20 is "yes" within the filtered dataset
+yes_count_filtered <- filtered_data %>%
+  filter(transmem_proximal_20 == "yes") %>%
+  nrow()
+
+# Calculate the percentage of these "yes" rows relative to the total filtered dataset
+percentage_yes_filtered <- (yes_count_filtered / total_rows_filtered) * 100
+
+# Print the result
+print(paste("Percentage of SwissPalm site matches proximal to membrane:", percentage_yes_filtered, "%"))
+
+
+```
+
+
+## Molecular weight histograms for SwissPalm match vs not match
+```{r}
+
+# Split the data into 'Yes' and 'No' groups based on swisspalm_match
+mouse_TM_yes <- filter(mouse_TM_proximity, swisspalm_match == "Yes")
+mouse_TM_no <- filter(mouse_TM_proximity, swisspalm_match == "No")
+
+# Adjust the ggplot call for the mouse_TM_proximity dataframe
+ggplot(mouse_TM_proximity, aes(x = trypsin_mw_0)) +
+  geom_histogram(binwidth = 100, fill = "steelblue", color = "black") +
+  annotate("rect", xmin = 700, xmax = 3000, ymin = 0, ymax = Inf, alpha = 0.2, fill = "orange") +
+  labs(x = "Molecular Weight (Da)", y = "Count", 
+       title = "MW of Tryptic Cys-peptides: SwissPalm Match") +
+  theme_minimal() +
+  scale_x_continuous(limits = c(0, 10000)) +
+  facet_wrap(~ swisspalm_match, ncol = 1, scales = "free_y")
+
+# Function to calculate statistics
+calculate_statistics <- function(df, group_name) {
+  median_val <- median(df$trypsin_mw_0, na.rm = TRUE)
+  std_dev_val <- sd(df$trypsin_mw_0, na.rm = TRUE)
+  variance_val <- var(df$trypsin_mw_0, na.rm = TRUE)
+  iqr_val <- IQR(df$trypsin_mw_0, na.rm = TRUE)
+  quantile_75th_val <- quantile(df$trypsin_mw_0, 0.75, na.rm = TRUE)
+  quantile_90th_val <- quantile(df$trypsin_mw_0, 0.90, na.rm = TRUE)
+  mean_val <- mean(df$trypsin_mw_0, na.rm = TRUE)
+  high_value_threshold <- quantile(df$trypsin_mw_0, 0.90, na.rm = TRUE)
+  prop_above_threshold_val <- sum(df$trypsin_mw_0 > high_value_threshold, na.rm = TRUE) / sum(!is.na(df$trypsin_mw_0))
+  
+  cat("Statistics for group:", group_name, "\n",
+      "Median trypsin_mw_0: ", median_val, "\n",
+      "Standard Deviation of trypsin_mw_0: ", std_dev_val, "\n",
+      "Variance of trypsin_mw_0: ", variance_val, "\n",
+      "IQR of trypsin_mw_0: ", iqr_val, "\n",
+      "75th percentile of trypsin_mw_0: ", quantile_75th_val, "\n",
+      "90th percentile of trypsin_mw_0: ", quantile_90th_val, "\n",
+      "Mean of trypsin_mw_0: ", mean_val, "\n",
+      "Proportion of values above the 90th percentile threshold: ", prop_above_threshold_val, "\n\n")
+}
+
+# Calculate and print statistics for each group
+calculate_statistics(mouse_TM_yes, "Yes")
+calculate_statistics(mouse_TM_no, "No")
+
+
+```
+
+## Swisspalm matches based on hydrophobicity
+```{r}
+
+# Adjust the ggplot call for the mouse_TM_proximity dataframe to compare hydrophobicity
+ggplot(mouse_TM_proximity, aes(x = trypsin_hydrophobicity_0)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black") +
+  annotate("rect", xmin = -2, xmax = 1, ymin = 0, ymax = Inf, alpha = 0.2, fill = "orange") +
+  labs(x = "Kyte-Doolittle Hydrophobicity", y = "Count", 
+       title = "GRAVY of Tryptic Cys-peptides: SwissPalm Match") +
+  theme_minimal() +
+  scale_x_continuous(limits = c(-3, +4)) +
+  facet_wrap(~ swisspalm_match, ncol = 1, scales = "free_y")
+
+# Function to calculate and print statistics for hydrophobicity including the specified range percentage
+calculate_statistics <- function(df, group_name) {
+  # Hydrophobicity statistics
+  median_hydro <- median(df$trypsin_hydrophobicity_0, na.rm = TRUE)
+  std_dev_hydro <- sd(df$trypsin_hydrophobicity_0, na.rm = TRUE)
+  variance_hydro <- var(df$trypsin_hydrophobicity_0, na.rm = TRUE)
+  iqr_hydro <- IQR(df$trypsin_hydrophobicity_0, na.rm = TRUE)
+  mean_hydro <- mean(df$trypsin_hydrophobicity_0, na.rm = TRUE)
+  
+  # Calculating the percentage of hydrophobicity values within the range -2 to +1
+  total_count <- nrow(df)
+  range_count <- sum(df$trypsin_hydrophobicity_0 >= -2 & df$trypsin_hydrophobicity_0 <= 1, na.rm = TRUE)
+  percentage_in_range <- (range_count / total_count) * 100
+  
+  # Print hydrophobicity statistics along with the percentage within the specified range
+  cat("Statistics for group:", group_name, "\n",
+      "Median Hydrophobicity: ", median_hydro, "\n",
+      "Standard Deviation of Hydrophobicity: ", std_dev_hydro, "\n",
+      "Variance of Hydrophobicity: ", variance_hydro, "\n",
+      "IQR of Hydrophobicity: ", iqr_hydro, "\n",
+      "Mean of Hydrophobicity: ", mean_hydro, "\n",
+      "Percentage of Hydrophobicity from -2 to +1: ", percentage_in_range, "%\n\n")
+}
+
+# Split the data into 'Yes' and 'No' groups based on swisspalm_match
+mouse_TM_yes <- filter(mouse_TM_proximity, swisspalm_match == "Yes")
+mouse_TM_no <- filter(mouse_TM_proximity, swisspalm_match == "No")
+
+# Calculate and print statistics for each group
+calculate_statistics(mouse_TM_yes, "Yes")
+calculate_statistics(mouse_TM_no, "No")
+
+
+```
+
+
+## Swisspalm Matches - What percentages of them fall in the "detectable" ranges based on MW and hydrophobicity
+## Pie Charts
+
+```{r}
+
+calculate_counts <- function(df_subset, label) {
+  satisfy_both <- nrow(df_subset[
+    df_subset$trypsin_mw_0 >= 700 &
+    df_subset$trypsin_mw_0 <= 3000 &
+    df_subset$trypsin_hydrophobicity_0 >= -2 &
+    df_subset$trypsin_hydrophobicity_0 <= 1, ])
+  
+  satisfy_mw_only <- nrow(df_subset[
+    df_subset$trypsin_mw_0 >= 700 &
+    df_subset$trypsin_mw_0 <= 3000 &
+    !(df_subset$trypsin_hydrophobicity_0 >= -2 &
+      df_subset$trypsin_hydrophobicity_0 <= 1), ])
+  
+  satisfy_hydrophobicity_only <- nrow(df_subset[
+    !(df_subset$trypsin_mw_0 >= 700 &
+      df_subset$trypsin_mw_0 <= 3000) &
+    df_subset$trypsin_hydrophobicity_0 >= -2 &
+    df_subset$trypsin_hydrophobicity_0 <= 1, ])
+  
+  satisfy_neither <- nrow(df_subset[
+    !(df_subset$trypsin_mw_0 >= 700 &
+      df_subset$trypsin_mw_0 <= 3000) &
+    !(df_subset$trypsin_hydrophobicity_0 >= -2 &
+      df_subset$trypsin_hydrophobicity_0 <= 1), ])
+  
+  # Return a list of counts for plotting
+  return(c(satisfy_both, satisfy_mw_only, satisfy_hydrophobicity_only, satisfy_neither))
+}
+
+# Separate the dataframe by swisspalm_match and calculate counts
+mouse_TM_yes <- mouse_TM_proximity %>% filter(swisspalm_match == "Yes")
+mouse_TM_no <- mouse_TM_proximity %>% filter(swisspalm_match == "No")
+
+counts_yes <- calculate_counts(mouse_TM_yes, "SwissPalm Match YES")
+counts_no <- calculate_counts(mouse_TM_no, "SwissPalm Match NO")
+
+
+
+create_pie_chart <- function(counts, label) {
+  data_for_pie <- data.frame(
+    Category = c("Satisfy Both", "Satisfy MW Only", "Satisfy Hydrophobicity Only", "Satisfy Neither"),
+    Count = counts
+  )
+  
+  colors <- c("Satisfy Both" = "blue", 
+              "Satisfy MW Only" = "purple", 
+              "Satisfy Hydrophobicity Only" = "yellow", 
+              "Satisfy Neither" = "orange")
+  
+  ggplot(data_for_pie, aes(x = "", y = Count, fill = Category)) +
+    geom_bar(width = 1, stat = "identity") +
+    coord_polar("y", start = 0) +
+    theme_void() +
+    scale_fill_manual(values = colors) +
+    labs(title = paste("Distribution of Cys-peptides within Detection Ranges:", label), fill = "Criteria") +
+    theme(legend.title = element_text(size = 12), legend.text = element_text(size = 10))
+}
+
+# Create pie charts
+create_pie_chart(counts_yes, "SwissPalm Match YES")
+create_pie_chart(counts_no, "SwissPalm Match NO")
+
+
+```
+
+```{r}
+
+calculate_counts <- function(df_subset, label) {
+  satisfy_both <- nrow(df_subset[
+    df_subset$trypsin_mw_0 >= 700 &
+    df_subset$trypsin_mw_0 <= 3000 &
+    df_subset$trypsin_hydrophobicity_0 >= -2 &
+    df_subset$trypsin_hydrophobicity_0 <= 1, ])
+  
+  does_not_satisfy_both <- nrow(df_subset[
+    !(df_subset$trypsin_mw_0 >= 700 &
+      df_subset$trypsin_mw_0 <= 3000 &
+      df_subset$trypsin_hydrophobicity_0 >= -2 &
+      df_subset$trypsin_hydrophobicity_0 <= 1), ])
+
+  total_count <- satisfy_both + does_not_satisfy_both
+  percent_satisfy_both <- (satisfy_both / total_count) * 100
+  percent_does_not_satisfy_both <- (does_not_satisfy_both / total_count) * 100
+
+  # Print the percentages to the console
+  cat("For", label, ":\n",
+      "Satisfy Both: ", percent_satisfy_both, "%\n",
+      "Does Not Satisfy Both: ", percent_does_not_satisfy_both, "%\n\n")
+
+  # Return counts for plotting with simplified categories
+  return(c(satisfy_both, does_not_satisfy_both))
+}
+
+
+create_pie_chart <- function(counts, label) {
+  data_for_pie <- data.frame(
+    Category = c("Satisfy Both", "Does Not Satisfy Both"),
+    Count = counts
+  )
+  
+  colors <- c("Satisfy Both" = "blue", "Does Not Satisfy Both" = "orange")
+  
+  ggplot(data_for_pie, aes(x = "", y = Count, fill = Category)) +
+    geom_bar(width = 1, stat = "identity") +
+    coord_polar("y", start = 0) +
+    theme_void() +
+    scale_fill_manual(values = colors) +
+    labs(title = paste("Distribution of Cys-peptides within Detection Ranges:", label), fill = "Criteria") +
+    theme(legend.title = element_text(size = 12), legend.text = element_text(size = 10))
+}
+
+
+# Calculate counts and print percentages for both groups
+counts_yes <- calculate_counts(mouse_TM_yes, "SwissPalm Match YES")
+counts_no <- calculate_counts(mouse_TM_no, "SwissPalm Match NO")
+
+# Use these counts to create pie charts
+create_pie_chart(counts_yes, "SwissPalm Match YES")
+create_pie_chart(counts_no, "SwissPalm Match NO")
+
+
+```
+
+
+## Scatterplot for Swisspalm sites vs not sites
+
+```{r}
+
+# Scatter plot with color based on SwissPalm match and dashed rectangle for specific range
+scatter_plot <- ggplot(mouse_TM_proximity, aes(x = trypsin_hydrophobicity_0, y = trypsin_mw_0, color = swisspalm_match)) +
+  geom_point(aes(size = swisspalm_match, alpha = swisspalm_match)) +  # alpha based on match
+  scale_size_manual(values = c("Yes" = 1, "No" = 1)) +  # Same sizes for yes and no
+  scale_alpha_manual(values = c("Yes" = 0.7, "No" = 0.05)) +  # More transparency for "No"
+  scale_color_manual(values = c("Yes" = "magenta", "No" = "gray")) +
+  labs(x = "Trypsin Hydrophobicity", y = "Molecular Weight (Da)", title = "Scatter Plot of Trypsin Peptides",
+       color = "SwissPalm Match") +
+  ylim(0, 10000) +
+  xlim(-3,3) + # Se x-axis limits
+  theme_minimal() +
+  geom_rect(aes(xmin = -2, xmax = 1, ymin = 700, ymax = 3000), inherit.aes = FALSE,
+            fill = NA, color = "black", size = 1.0, linetype = "dashed") +
+  guides(size = FALSE, alpha = FALSE)  # Remove guides for size and alpha if not needed
+
+print(scatter_plot)
+
+# Saving the scatter plot as an PDF file
+ggsave("MW_hydrophobicity_swisspalm.pdf", plot = scatter_plot, width = 8, height = 6, units = "in")
+
+```
+
+
+
+
+### BElOW IS UNFINISHED. COPIED FROM OTHER CODE NEED TO ADAPT TO ABOVE CODE
+
+#### Chymotrypsin
+
+# Define chymotrypsin function
+# cuts at aromatics unless followed by a P
+# for now specifying no missed cleavages
+
+perform_chymotrypsin_digestion <- function(sequence, cys_position) {
+  
+  # Chymotrypsin cleaves after F, W, and Y but not before P
+  peptides <- strsplit(sequence, "(?<=[FYW])(?=[^P])", perl = TRUE)[[1]]
+
+  # Get the length of each peptide
+  peptide_lengths <- nchar(peptides)
+  
+  # Get the cumulative sum of peptide lengths
+  cumulative_peptide_lengths <- cumsum(peptide_lengths)
+  
+  # Get the index of the peptide containing the cysteine of interest
+  cys_peptide_index <- sum(cys_position > cumulative_peptide_lengths) + 1
+  
+  # Return the peptide sequence
+  return(peptides[cys_peptide_index])
+}
+
+# Apply the chymotrypsin digestion function to the Sequence and cys_position columns
+prediction_mouse_membrane_digestion$chymotrypsin_sequence_0 <- mapply(perform_chymotrypsin_digestion, 
+                                                                        prediction_mouse_membrane_digestion$Sequence, 
+                                                                         prediction_mouse_membrane_digestion$cys_position)
+
+# Calculate the molecular weight of the chymotrypsin_sequence_0
+prediction_mouse_membrane_digestion$chymotrypsin_mw_0 <- sapply(prediction_mouse_membrane_digestion$chymotrypsin_sequence_0, mw)
+
+# Apply the hydrophobicity function to each sequence
+prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 <- sapply(prediction_mouse_membrane_digestion$chymotrypsin_sequence_0, calc_hydrophobicity)
+
+## Histograms of MW and hydrophobicity for chymotrypsin
+ggplot(prediction_mouse_membrane_digestion, aes(x = chymotrypsin_mw_0)) +
+  geom_histogram(binwidth = 100, fill = "steelblue", color = "black") +
+  labs(x = "Molecular Weight (Da)", y = "Count", 
+       title = "Molecular Weights of Peptides - Chymotrypsin") +
+  theme_minimal()+
+  scale_x_continuous(limits = c(0, 10000))
+
+ggplot(prediction_mouse_membrane_digestion, aes(x = chymotrypsin_hydrophobicity_0)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black") +
+  annotate("rect", xmin = -1, xmax = 1, ymin = 0, ymax = Inf, alpha = 0.2, fill = "orange") +
+  labs(x = "Hydrophobicity (Kyte-Doolittle Scale)", y = "Count", 
+       title = "GRAVY of Predicted S-palmitoyl peptides - Chymotrypsin") +
+  theme_minimal() +
+  scale_x_continuous(limits = c(-3, +4))
+
+
+### Print out the chymotrypsin results
+# Determine how many Cys sites fall in the range of detection
+# cutoff MW is MW 700 - 3000
+# cutoff hydrophobicity is -1 to +1
+
+# 1) $chymotrypsin_mw_0 between 700 - 3000 AND 2) $chymotrypsin_hydrophobicity_0 between -1 and +1
+satisfy_both <- nrow(prediction_mouse_membrane_digestion[ 
+  prediction_mouse_membrane_digestion$chymotrypsin_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_mw_0 <= 3000 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 <= 1, ])
+
+# satisfy #1 but not #2
+satisfy_mw_only <- nrow(prediction_mouse_membrane_digestion[ 
+  prediction_mouse_membrane_digestion$chymotrypsin_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_mw_0 <= 3000 & 
+  !(prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 <= 1), ])
+
+# satisfy #2 but not #1
+satisfy_hydrophobicity_only <- nrow(prediction_mouse_membrane_digestion[ 
+  !(prediction_mouse_membrane_digestion$chymotrypsin_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_mw_0 <= 3000) & 
+  prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 <= 1, ])
+
+# satisfy neither
+satisfy_neither <- nrow(prediction_mouse_membrane_digestion[ 
+  !(prediction_mouse_membrane_digestion$chymotrypsin_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_mw_0 <= 3000) & 
+  !(prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 <= 1), ])
+
+# Print the counts
+cat("Rows that satisfy both criteria: ", satisfy_both, "\n",
+    "Rows that satisfy molecular weight criteria only: ", satisfy_mw_only, "\n",
+    "Rows that satisfy hydrophobicity criteria only: ", satisfy_hydrophobicity_only, "\n",
+    "Rows that satisfy neither criteria: ", satisfy_neither)
+
+## Determine topological location of the peptides
+# is there a bias against transmembrane cys sites?
+
+total_counts <- table(prediction_mouse_membrane_digestion$Topological_location)
+
+# Rows that satisfy both criteria
+satisfy_both <- prediction_mouse_membrane_digestion[ 
+  prediction_mouse_membrane_digestion$chymotrypsin_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_mw_0 <= 3000 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 <= 1, ]
+cat("Counts and fraction for rows that satisfy both criteria by Topological_location:\n\n")
+both_table <- table(satisfy_both$Topological_location)
+both_fraction <- both_table / total_counts
+print(data.frame(counts = both_table, fraction = both_fraction))
+
+# Rows that satisfy molecular weight criteria only
+satisfy_mw_only <- prediction_mouse_membrane_digestion[ 
+  prediction_mouse_membrane_digestion$chymotrypsin_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_mw_0 <= 3000 & 
+  !(prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 <= 1), ]
+cat("Counts and fraction for rows that satisfy molecular weight criteria only by Topological_location:\n\n")
+mw_only_table <- table(satisfy_mw_only$Topological_location)
+mw_only_fraction <- mw_only_table / total_counts
+print(data.frame(counts = mw_only_table, fraction = mw_only_fraction))
+
+# Rows that satisfy hydrophobicity criteria only
+satisfy_hydrophobicity_only <- prediction_mouse_membrane_digestion[ 
+  !(prediction_mouse_membrane_digestion$chymotrypsin_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_mw_0 <= 3000) & 
+  prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 <= 1, ]
+cat("Counts and fraction for rows that satisfy hydrophobicity criteria only by Topological_location:\n\n")
+hydro_only_table <- table(satisfy_hydrophobicity_only$Topological_location)
+hydro_only_fraction <- hydro_only_table / total_counts
+print(data.frame(counts = hydro_only_table, fraction = hydro_only_fraction))
+
+# Rows that satisfy neither criteria
+satisfy_neither <- prediction_mouse_membrane_digestion[ 
+  !(prediction_mouse_membrane_digestion$chymotrypsin_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_mw_0 <= 3000) & 
+  !(prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$chymotrypsin_hydrophobicity_0 <= 1), ]
+cat("Counts and fraction for rows that satisfy neither criteria by Topological_location:\n\n")
+neither_table <- table(satisfy_neither$Topological_location)
+neither_fraction <- neither_table / total_counts
+print(data.frame(counts = neither_table, fraction = neither_fraction))
+
+
+#### WALP
+# Define WALP function
+# cuts after T, A, S, V 
+
+perform_walp_digestion <- function(sequence, cys_position) {
+  
+  # WALP cleaves after T, A, S, and V
+  peptides <- strsplit(sequence, "(?<=[TASV])", perl = TRUE)[[1]]
+
+  # Get the length of each peptide
+  peptide_lengths <- nchar(peptides)
+  
+  # Get the cumulative sum of peptide lengths
+  cumulative_peptide_lengths <- cumsum(peptide_lengths)
+  
+  # Get the index of the peptide containing the cysteine of interest
+  cys_peptide_index <- sum(cys_position > cumulative_peptide_lengths) + 1
+  
+  # Return the peptide sequence
+  return(peptides[cys_peptide_index])
+}
+
+# Apply the WALP digestion function to the Sequence and cys_position columns
+prediction_mouse_membrane_digestion$walp_sequence_0 <- mapply(perform_walp_digestion, 
+                                                                        prediction_mouse_membrane_digestion$Sequence, 
+                                                                        prediction_mouse_membrane_digestion$cys_position)
+
+# Calculate the molecular weight of the walp_sequence_0
+prediction_mouse_membrane_digestion$walp_mw_0 <- sapply(prediction_mouse_membrane_digestion$walp_sequence_0, mw)
+
+# Apply the hydrophobicity function to each sequence
+prediction_mouse_membrane_digestion$walp_hydrophobicity_0 <- sapply(prediction_mouse_membrane_digestion$walp_sequence_0, calc_hydrophobicity)
+
+## Histograms of MW and hydrophobicity for chymotrypsin
+ggplot(prediction_mouse_membrane_digestion, aes(x = walp_mw_0)) +
+  geom_histogram(binwidth = 100, fill = "steelblue", color = "black") +
+  labs(x = "Molecular Weight (Da)", y = "Count", 
+       title = "Molecular Weights of Peptides - WALP") +
+  theme_minimal()+
+  scale_x_continuous(limits = c(0, 10000))
+
+ggplot(prediction_mouse_membrane_digestion, aes(x = walp_hydrophobicity_0)) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black") +
+  annotate("rect", xmin = -1, xmax = 1, ymin = 0, ymax = Inf, alpha = 0.2, fill = "orange") +
+  labs(x = "Hydrophobicity (Kyte-Doolittle Scale)", y = "Count", 
+       title = "Hydrophobicity of Peptides - WALP") +
+  theme_minimal() +
+  scale_x_continuous(limits = c(-3, +4))
+
+# 1) $walp_mw_0 between 700 - 3000 AND 2) $walp_hydrophobicity_0 between -1 and +1
+satisfy_both <- nrow(prediction_mouse_membrane_digestion[ 
+  prediction_mouse_membrane_digestion$walp_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$walp_mw_0 <= 3000 & 
+  prediction_mouse_membrane_digestion$walp_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$walp_hydrophobicity_0 <= 1, ])
+
+# satisfy #1 but not #2
+satisfy_mw_only <- nrow(prediction_mouse_membrane_digestion[ 
+  prediction_mouse_membrane_digestion$walp_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$walp_mw_0 <= 3000 & 
+  !(prediction_mouse_membrane_digestion$walp_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$walp_hydrophobicity_0 <= 1), ])
+
+# satisfy #2 but not #1
+satisfy_hydrophobicity_only <- nrow(prediction_mouse_membrane_digestion[ 
+  !(prediction_mouse_membrane_digestion$walp_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$walp_mw_0 <= 3000) & 
+  prediction_mouse_membrane_digestion$walp_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$walp_hydrophobicity_0 <= 1, ])
+
+# satisfy neither
+satisfy_neither <- nrow(prediction_mouse_membrane_digestion[ 
+  !(prediction_mouse_membrane_digestion$walp_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$walp_mw_0 <= 3000) & 
+  !(prediction_mouse_membrane_digestion$walp_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$walp_hydrophobicity_0 <= 1), ])
+
+# Print the counts
+cat("Rows that satisfy both criteria: ", satisfy_both, "\n",
+    "Rows that satisfy molecular weight criteria only: ", satisfy_mw_only, "\n",
+    "Rows that satisfy hydrophobicity criteria only: ", satisfy_hydrophobicity_only, "\n",
+    "Rows that satisfy neither criteria: ", satisfy_neither)
+
+## Determine topological location of the peptides
+# is there a bias against transmembrane cys sites?
+
+total_counts <- table(prediction_mouse_membrane_digestion$Topological_location)
+
+# Rows that satisfy both criteria
+satisfy_both <- prediction_mouse_membrane_digestion[ 
+  prediction_mouse_membrane_digestion$walp_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$walp_mw_0 <= 3000 & 
+  prediction_mouse_membrane_digestion$walp_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$walp_hydrophobicity_0 <= 1, ]
+cat("Counts and fraction for rows that satisfy both criteria by Topological_location:\n\n")
+both_table <- table(satisfy_both$Topological_location)
+both_fraction <- both_table / total_counts
+print(data.frame(counts = both_table, fraction = both_fraction))
+
+# Rows that satisfy molecular weight criteria only
+satisfy_mw_only <- prediction_mouse_membrane_digestion[ 
+  prediction_mouse_membrane_digestion$walp_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$walp_mw_0 <= 3000 & 
+  !(prediction_mouse_membrane_digestion$walp_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$walp_hydrophobicity_0 <= 1), ]
+cat("Counts and fraction for rows that satisfy molecular weight criteria only by Topological_location:\n\n")
+mw_only_table <- table(satisfy_mw_only$Topological_location)
+mw_only_fraction <- mw_only_table / total_counts
+print(data.frame(counts = mw_only_table, fraction = mw_only_fraction))
+
+# Rows that satisfy hydrophobicity criteria only
+satisfy_hydrophobicity_only <- prediction_mouse_membrane_digestion[ 
+  !(prediction_mouse_membrane_digestion$walp_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$walp_mw_0 <= 3000) & 
+  prediction_mouse_membrane_digestion$walp_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$walp_hydrophobicity_0 <= 1, ]
+cat("Counts and fraction for rows that satisfy hydrophobicity criteria only by Topological_location:\n\n")
+hydro_only_table <- table(satisfy_hydrophobicity_only$Topological_location)
+hydro_only_fraction <- hydro_only_table / total_counts
+print(data.frame(counts = hydro_only_table, fraction = hydro_only_fraction))
+
+# Rows that satisfy neither criteria
+satisfy_neither <- prediction_mouse_membrane_digestion[ 
+  !(prediction_mouse_membrane_digestion$walp_mw_0 >= 700 & 
+  prediction_mouse_membrane_digestion$walp_mw_0 <= 3000) & 
+  !(prediction_mouse_membrane_digestion$walp_hydrophobicity_0 >= -1 & 
+  prediction_mouse_membrane_digestion$walp_hydrophobicity_0 <= 1), ]
+cat("Counts and fraction for rows that satisfy neither criteria by Topological_location:\n\n")
+neither_table <- table(satisfy_neither$Topological_location)
+neither_fraction <- neither_table / total_counts
+print(data.frame(counts = neither_table, fraction = neither_fraction))
+
+
+
+
